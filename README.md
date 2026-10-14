@@ -63,14 +63,14 @@ Notch places a transparent, frameless island at the top of a selected display, b
 Clone the repository and install the exact dependency versions recorded in the lockfile:
 
 ```powershell
-git clone https://github.com/<your-username>/Notchy.git
+git clone https://github.com/JemxProgramz/Notchy.git
 cd Notchy
 npm ci
 npm run check
 npm run dev
 ```
 
-Replace `<your-username>` with the GitHub account or organization that owns the repository. `npm run check` validates JavaScript syntax, package metadata, renderer wiring, and the Windows icon.
+`npm run check` validates JavaScript syntax, package metadata, renderer wiring, and the Windows icon.
 
 ## Build
 
