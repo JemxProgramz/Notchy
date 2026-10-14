@@ -1,0 +1,20 @@
+node_modules/
+/release*/
+/dist/
+/coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp.pfx
+*.pfx
+*.p12
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+
+# Local wallpaper references; not included in the application package.
+/Bgimg/

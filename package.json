@@ -1,0 +1,44 @@
+{
+  "name": "notch-desktop",
+  "version": "1.0.0",
+  "description": "A lightweight Windows Dynamic Island utility",
+  "main": "src/main.js",
+  "engines": { "node": ">=22.12.0" },
+  "author": "Notch",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "check": "node scripts/check.cjs",
+    "build": "electron-builder --win nsis portable",
+    "build:dir": "electron-builder --dir",
+    "build:appx": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-appx.ps1"
+  },
+  "dependencies": {
+    "systeminformation": "^5.33.14"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.notch.desktop",
+    "productName": "Notch",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "directories": { "output": "dist" },
+    "files": ["src/**/*", "assets/**/*", "package.json"],
+    "win": {
+      "icon": "assets/notch.ico",
+      "target": ["nsis", "portable"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Notch"
+    },
+    "portable": { "artifactName": "Notch-${version}-portable.${ext}" }
+  }
+}

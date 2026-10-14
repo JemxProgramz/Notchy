@@ -1,0 +1,25 @@
+appId: com.notch.desktop
+productName: Notch
+asar: true
+electronDist: node_modules/electron/dist
+toolsets:
+  winCodeSign: '1.1.0'
+directories:
+  output: dist/appx
+files:
+  - src/**/*
+  - assets/**/*
+  - package.json
+win:
+  icon: assets/notch.ico
+  target: appx
+  artifactName: Notch-${version}-browser-media.${ext}
+appx:
+  identityName: NotchDesktop
+  applicationId: NotchDesktop
+  publisher: 'CN=Notch'
+  publisherDisplayName: Notch
+  backgroundColor: '#0b0b10'
+  capabilities:
+    - runFullTrust
+    - globalMediaControl

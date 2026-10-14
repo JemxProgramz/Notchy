@@ -1,0 +1,36 @@
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-height:510px;overflow:auto;padding:2px 4px 8px}
+.settings-card h3{font-size:14px;margin:0 0 10px}
+.setting-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:8px 0;border-top:1px solid rgba(128,128,128,.16);font-size:12px}
+.setting-row:first-of-type{border-top:0}
+.setting-row small{display:block;color:var(--mut);font-size:10px;margin-top:3px}
+.setting-row input[type=checkbox]{accent-color:var(--gold);width:16px;height:16px}
+.setting-row input[type=text],.setting-row input[type=number],.setting-row select{max-width:155px;background:var(--tile);color:var(--tx);border:1px solid rgba(128,128,128,.22);border-radius:9px;padding:7px 9px;font:inherit;font-size:12px}
+.setting-row select option{background:#202024;color:#f5f5f7}
+.setting-actions{display:flex;gap:8px;align-items:center;margin-top:12px}
+.setting-actions button,.app-add,.desktop-apply,.reminder-add,.reminder-form button{border:0;border-radius:10px;background:var(--gold);color:var(--ink);padding:8px 12px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.setting-note,.native-empty{color:var(--mut);font-size:12px;padding:12px 4px}
+.app-add{flex:none;padding:7px 10px}
+.ar3 .app-icon{width:32px;height:32px;object-fit:contain;border-radius:8px}
+.ar3 .app-fallback{width:32px;height:32px;border-radius:9px;background:rgba(255,255,255,.1);display:grid;place-items:center;font-size:13px;font-weight:700}
+.ar3 .sb{background:none;border:0;color:var(--mut);padding:4px;cursor:pointer}
+.ar3 .sb.on{color:var(--gold)}
+.desktop-apply{margin-left:auto}
+.reminder-wrap{margin-top:10px;padding-top:9px;border-top:1px solid rgba(128,128,128,.17)}
+.reminder-head{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:600;margin-bottom:5px}
+.reminder-add{padding:4px 9px}
+.reminder-form{display:grid;grid-template-columns:1fr auto auto auto;gap:5px;margin:7px 0}
+.reminder-form[hidden]{display:none}
+.reminder-form input{min-width:0;width:100%;background:var(--tile);color:var(--tx);border:1px solid rgba(128,128,128,.22);border-radius:8px;padding:6px;font:inherit;font-size:11px}
+.reminder-list{display:grid;gap:4px;max-height:78px;overflow:auto}
+.reminder-item{display:flex;justify-content:space-between;gap:8px;font-size:11px;padding:4px 0;color:var(--mut)}
+.reminder-item b{color:var(--tx);font-weight:500}
+.reminder-item button{border:0;background:none;color:var(--mut);cursor:pointer}
+body.no-motion *,body.no-motion *::before,body.no-motion *::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+
+/* Match Chromium scrollbars to the dark glass surface and remove its bright arrow buttons. */
+*{scrollbar-width:thin!important;scrollbar-color:color-mix(in srgb,var(--gold) 55%,transparent) transparent!important}
+*::-webkit-scrollbar{width:8px;height:8px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--gold) 40%,transparent);border:2px solid transparent;border-radius:99px;background-clip:padding-box}
+*::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--gold) 78%,transparent);border:2px solid transparent;background-clip:padding-box}
+*::-webkit-scrollbar-button{display:none;width:0;height:0}
