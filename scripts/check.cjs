@@ -27,6 +27,9 @@ if (integration.includes('class="wireless-tile"') || !integration.includes('clas
 if (!integration.includes('data-action="wifi-network"') || !integration.includes('id="wifi-password-form"') || !integration.includes('data-action="wifi-password-toggle"') || !integration.includes('api.wireless.connectWifi')) {
   throw new Error('Nearby Wi-Fi networks must support in-notch connection and password visibility');
 }
+if (!integration.includes("const panelKey = kind === 'WiFi' ? 'wifi' : 'bt'") || !integration.includes('wirelessOpen === panelKey')) {
+  throw new Error('Enabling a wireless radio must refresh its open panel');
+}
 if (!integration.includes('wifi.connected ? `Connected to ${escapeMarkup(wifi.name || \'Wi-Fi\')}`') || !integration.includes('wifiConnectionAttempt ? `Connecting to')) {
   throw new Error('Wi-Fi must show connecting and confirmed connected status');
 }

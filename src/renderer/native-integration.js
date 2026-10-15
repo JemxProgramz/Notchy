@@ -308,6 +308,7 @@
   async function toggleWirelessRadio(kind) {
     if (wirelessBusy) return;
     const key = kind === 'WiFi' ? 'wifi' : 'bluetooth';
+    const panelKey = kind === 'WiFi' ? 'wifi' : 'bt';
     const previous = ui.controls?.[key] || {};
     const enabled = !previous.enabled;
     ui.controls = {
@@ -331,7 +332,7 @@
     }
     renderTiles();
     renderWirelessPanel();
-    if (result && wirelessOpen === key) void refreshWireless();
+    if (result && wirelessOpen === panelKey) void refreshWireless();
   }
   $('#tiles').addEventListener('click', async event => {
     const target = event.target instanceof Element ? event.target : null;
