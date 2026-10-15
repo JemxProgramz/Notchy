@@ -20,6 +20,9 @@
   };
 
   function selectTab(name) {
+    if (name !== 'Controls' && wirelessOpen) {
+      closeWirelessPanel();
+    }
     $$('#nav button').forEach(button => button.classList.toggle('on', button.dataset.t === name));
     $$('.v').forEach(view => view.classList.toggle('on', view.id === `v-${name.toLowerCase()}`));
     $('#isl').classList.toggle('wide', ['Today', 'Stats', 'Clipboard', 'Wallpaper', 'Settings'].includes(name));
@@ -142,20 +145,122 @@
   };
 
   /* Real Windows control state and actions. */
-  const settingsArea = { wifi: 'wifi', bt: 'bluetooth', night: 'nightlight' };
+  const settingsArea = { night: 'nightlight' };
+  let wirelessOpen = null;
+  let selectedNetwork = null;
+  let wirelessBusy = false;
+  let wirelessLoading = false;
+  let wirelessRequestId = 0;
+  let wifiConnectionAttempt = null;
+  const escapeMarkup = value => String(value).replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[char]);
+  const pluralize = (count, singular, plural = `${singular}s`) => `${count} ${count === 1 ? singular : plural}`;
   function renderTiles() {
     const controls = ui.controls || {};
     const wifi = controls.wifi || {};
     const bluetooth = controls.bluetooth || {};
+    const wifiNetworks = Array.isArray(wifi.networks) ? wifi.networks.length : 0;
+    const bluetoothDevices = Array.isArray(bluetooth.devices) ? bluetooth.devices.length : 0;
     const labels = {
-      wifi: wifi.connected ? (wifi.name || 'Connected') : 'Not connected',
-      bt: bluetooth.available ? `${bluetooth.devices?.length || 0} Bluetooth devices` : 'Unavailable',
+      wifi: wirelessOpen === 'wifi' && wirelessLoading ? 'Searching for networks' : wifi.connected ? `Connected · ${wifi.name || 'Wi-Fi'}` : !wifi.available || !wifi.radioAvailable ? 'Wireless control unavailable' : !wifi.enabled ? 'Networks paused' : wifiNetworks ? pluralize(wifiNetworks, 'network') + ' nearby' : 'Refresh to find networks',
+      bt: wirelessOpen === 'bt' && wirelessLoading ? 'Checking devices' : !bluetooth.available ? 'Not available on this PC' : !bluetooth.enabled ? 'Devices paused' : bluetoothDevices ? pluralize(bluetoothDevices, 'device') + ' detected' : 'No devices detected',
       night: 'Open Windows settings',
       dark: ui.settings.theme === 'light' ? 'Light theme' : 'Dark theme'
     };
-    const tile = (key, icon, title) => `<div style="grid-column:span 3"><button class="tg ${key === 'dark' && S.dark ? 'on' : ''}" data-k="${key}" type="button"><span class="ic">${ic(icon)}</span><span class="tx">${title}<small>${labels[key]}</small></span></button></div>`;
+    const tile = (key, icon, title) => {
+      if (key === 'wifi') {
+        return `<div style="grid-column:span 3"><button class="tg ${wifi.enabled ? 'on' : ''}" data-k="wifi" type="button" aria-expanded="${wirelessOpen === 'wifi'}" aria-controls="wireless-popover"><span class="ic">${ic(icon)}</span><span class="tx">${title}<small>${escapeMarkup(labels.wifi)}</small></span><span class="wireless-chevron" aria-hidden="true">${ic('ch')}</span></button></div>`;
+      }
+      if (key === 'bt') {
+        return `<div style="grid-column:span 3"><button class="tg ${bluetooth.enabled ? 'on' : ''}" data-k="bt" type="button" aria-expanded="${wirelessOpen === 'bt'}" aria-controls="wireless-popover"><span class="ic">${ic(icon)}</span><span class="tx">${title}<small>${escapeMarkup(labels.bt)}</small></span><span class="wireless-chevron" aria-hidden="true">${ic('ch')}</span></button></div>`;
+      }
+      return `<div style="grid-column:span 3"><button class="tg ${key === 'dark' && S.dark ? 'on' : ''}" data-k="${key}" type="button"><span class="ic">${ic(icon)}</span><span class="tx">${title}<small>${escapeMarkup(labels[key])}</small></span></button></div>`;
+    };
     $('#tiles').innerHTML = tile('wifi', 'wifi', 'Wi-Fi') + tile('bt', 'bt', 'Bluetooth') + tile('night', 'moon', 'Night Light') + tile('dark', 'dark', 'Notch theme');
     $('#spk').textContent = controls.volume == null ? 'Windows sound controls' : `Windows master volume · ${controls.volume}%`;
+  }
+  function renderWirelessPanel() {
+    const panel = $('#wireless-popover');
+    if (!wirelessOpen) {
+      panel.classList.remove('on');
+      panel.innerHTML = '';
+      panel.setAttribute('aria-hidden', 'true');
+      panel.setAttribute('aria-busy', 'false');
+      try { fit(); setTimeout(fit, 280); } catch { /* Geometry may not be ready yet. */ }
+      return;
+    }
+    const controls = ui.controls || {};
+    const wifi = controls.wifi || {};
+    const bluetooth = controls.bluetooth || {};
+    const busy = wirelessBusy || wirelessLoading ? 'disabled' : '';
+    if (wirelessOpen === 'wifi') {
+      const networks = Array.isArray(wifi.networks) ? wifi.networks : [];
+      const canScan = wifi.available && wifi.radioAvailable && wifi.enabled;
+      const current = wifiConnectionAttempt ? `Connecting to ${escapeMarkup(wifiConnectionAttempt)}…` : wirelessLoading ? 'Scanning for nearby networks…' : wifi.connected ? `Connected to ${escapeMarkup(wifi.name || 'Wi-Fi')}` : !wifi.available || !wifi.radioAvailable ? 'Wireless control is unavailable on this device' : !wifi.enabled ? 'Wi-Fi is off' : networks.length ? `${pluralize(networks.length, 'network')} nearby` : 'No networks found nearby';
+      const rows = wirelessLoading
+        ? '<div class="wireless-empty" role="status"><span class="wireless-spinner" aria-hidden="true"></span>Scanning for networks…</div>'
+        : canScan && networks.length
+        ? networks.map(network => `<div class="wireless-row"><span class="wireless-name" title="${escapeMarkup(network.name)}">${escapeMarkup(network.name)}</span><span class="wireless-meta">${network.saved ? 'Saved · ' : ''}${escapeMarkup(network.authentication)} · ${Math.round(network.signal)}%</span><button type="button" data-action="wifi-network" data-ssid="${escapeMarkup(network.name)}" ${!wifi.enabled || network.name === wifi.name || busy ? 'disabled' : ''}>${network.name === wifi.name ? 'Connected' : 'Connect'}</button></div>`).join('')
+        : !canScan ? '<div class="wireless-empty">Turn on Wi-Fi to see and connect to nearby networks.</div>' : '<div class="wireless-empty">No nearby networks found. Refresh to scan again.</div>';
+      const passwordForm = selectedNetwork
+        ? `<form class="wireless-form" id="wifi-password-form">${selectedNetwork.secure ? `<div class="wireless-password"><input id="wifi-password" type="password" autocomplete="current-password" placeholder="Password for ${escapeMarkup(selectedNetwork.name)}" aria-label="Wi-Fi password" required minlength="8" maxlength="64"><button type="button" data-action="wifi-password-toggle" aria-label="Show password" aria-pressed="false">Show</button></div>` : ''}<button type="submit" ${busy}>Connect</button><button type="button" data-action="wifi-cancel">Cancel</button></form><div class="wireless-caption">Windows will save this network profile for future connections.</div>`
+        : '';
+      panel.innerHTML = `<div class="wireless-card"><div class="wireless-head"><div><div class="wireless-title">Wi-Fi</div><div class="wireless-caption" role="status">${current}</div></div><div class="wireless-actions"><button type="button" class="wireless-refresh" data-action="wireless-refresh" aria-label="Refresh Wi-Fi networks" ${busy}>Refresh</button><button type="button" class="wireless-switch" data-action="wifi-toggle" role="switch" aria-label="Wi-Fi" aria-checked="${wifi.enabled}" ${!wifi.available || !wifi.radioAvailable || busy ? 'disabled' : ''}><span aria-hidden="true"></span></button></div></div>${wifi.connected ? `<div class="wireless-actions" style="margin-bottom:7px"><span class="wireless-connected" role="status"><span aria-hidden="true">●</span> Connected to ${escapeMarkup(wifi.name || 'Wi-Fi')}</span><button type="button" data-action="wifi-disconnect" ${busy}>Disconnect</button></div>` : ''}<div class="wireless-list">${rows}</div>${passwordForm}</div>`;
+    } else {
+      const devices = Array.isArray(bluetooth.devices) ? bluetooth.devices : [];
+      const rows = wirelessLoading
+        ? '<div class="wireless-empty" role="status"><span class="wireless-spinner" aria-hidden="true"></span>Checking Bluetooth devices…</div>'
+        : devices.length
+        ? devices.map(device => `<div class="wireless-row"><span class="wireless-name">${escapeMarkup(device.name || 'Bluetooth device')}</span><span class="wireless-meta">${device.paired === false ? 'Available' : device.connected === true ? 'Connected' : 'Paired'}</span>${device.paired === false && device.canPair && device.id ? `<button type="button" data-action="bluetooth-pair" data-device-id="${escapeMarkup(device.id)}" ${busy ? 'disabled' : ''}>Pair</button>` : ''}</div>`).join('')
+        : '<div class="wireless-empty">No Bluetooth devices detected.</div>';
+      const status = wirelessLoading ? 'Searching for Bluetooth devices…' : !bluetooth.available ? 'Bluetooth is unavailable on this device' : !bluetooth.enabled ? 'Bluetooth is off' : devices.length ? pluralize(devices.length, 'device') + ' found' : 'No Bluetooth devices found nearby';
+      panel.innerHTML = `<div class="wireless-card"><div class="wireless-head"><div><div class="wireless-title">Bluetooth</div><div class="wireless-caption" role="status">${status}</div></div><div class="wireless-actions"><button type="button" class="wireless-refresh" data-action="wireless-refresh" aria-label="Find Bluetooth devices" ${busy}>Find devices</button><button type="button" class="wireless-switch" data-action="bluetooth-toggle" role="switch" aria-label="Bluetooth" aria-checked="${bluetooth.enabled}" ${!bluetooth.available || busy ? 'disabled' : ''}><span aria-hidden="true"></span></button></div></div><div class="wireless-list">${rows}</div><div class="wireless-caption" style="margin-top:8px">Pair devices here. Windows may ask you to confirm pairing; paired accessories connect through Windows.</div></div>`;
+    }
+    panel.classList.add('on');
+    panel.setAttribute('aria-hidden', 'false');
+    panel.setAttribute('aria-busy', String(wirelessLoading || wirelessBusy));
+    try { fit(); setTimeout(fit, 280); } catch { /* Geometry may not be ready yet. */ }
+  }
+  function closeWirelessPanel() {
+    wirelessOpen = null;
+    selectedNetwork = null;
+    wirelessLoading = false;
+    wirelessRequestId++;
+    renderTiles();
+    renderWirelessPanel();
+  }
+  function toggleWirelessPanel(key) {
+    const isClosing = wirelessOpen === key;
+    wirelessOpen = isClosing ? null : key;
+    selectedNetwork = null;
+    if (isClosing) {
+      wirelessRequestId++;
+      wirelessLoading = false;
+    }
+    renderTiles();
+    renderWirelessPanel();
+  }
+  async function refreshWireless(deep = false) {
+    const requestId = ++wirelessRequestId;
+    wirelessLoading = true;
+    renderWirelessPanel();
+    const value = await safeCall(() => api.wireless.get(), 'Could not refresh wireless devices');
+    if (requestId !== wirelessRequestId) return;
+    if (wirelessOpen === 'wifi' && value?.wifi?.enabled) {
+      value.wifi.networks = await safeCall(() => api.wireless.scanWifi(), 'Could not scan nearby Wi-Fi networks') || [];
+      if (requestId !== wirelessRequestId) return;
+    }
+    if (wirelessOpen === 'bt' && value?.bluetooth?.enabled) {
+      value.bluetooth.devices = await safeCall(() => api.wireless.scanBluetooth(deep), 'Could not find nearby Bluetooth devices') || [];
+      if (requestId !== wirelessRequestId) return;
+    }
+    wirelessLoading = false;
+    if (!value) { renderWirelessPanel(); return; }
+    ui.controls = { ...ui.controls, ...value };
+    if (selectedNetwork && !value.wifi?.networks?.some(network => network.name === selectedNetwork.name)) selectedNetwork = null;
+    renderTiles();
+    renderWirelessPanel();
   }
   function syncControlSlider(input, value) {
     const level = Math.max(0, Math.min(100, Math.round(Number(value))));
@@ -171,6 +276,7 @@
     if (!value) return;
     ui.controls = value;
     renderTiles();
+    renderWirelessPanel();
     const volume = $('#vol');
     if (value.volume == null) {
       volume.disabled = true;
@@ -199,18 +305,149 @@
       $('#bp').textContent = `${value.brightness}%`;
     }
   }
-  $('#tiles').onclick = async event => {
-    const button = event.target.closest('[data-k]');
-    if (!button) return;
-    const key = button.dataset.k;
-    if (key === 'dark') {
-      const theme = ui.settings.theme === 'light' ? 'dark' : 'light';
-      if (await saveSetting({ theme })) toast(`${theme === 'dark' ? 'Dark' : 'Light'} theme`);
+  async function toggleWirelessRadio(kind) {
+    if (wirelessBusy) return;
+    const key = kind === 'WiFi' ? 'wifi' : 'bluetooth';
+    const previous = ui.controls?.[key] || {};
+    const enabled = !previous.enabled;
+    ui.controls = {
+      ...ui.controls,
+      [key]: {
+        ...previous,
+        enabled,
+        ...(kind === 'WiFi' && !enabled ? { connected: false, name: null } : {})
+      }
+    };
+    wirelessBusy = true;
+    renderTiles();
+    renderWirelessPanel();
+    const result = await safeCall(() => api.wireless.radio(kind, enabled), `Could not change ${kind === 'WiFi' ? 'Wi-Fi' : 'Bluetooth'} state`);
+    wirelessBusy = false;
+    if (result == null) {
+      ui.controls = { ...ui.controls, [key]: previous };
+    } else {
+      ui.controls = { ...ui.controls, [key]: { ...ui.controls[key], enabled: result } };
+      toast(`${kind === 'WiFi' ? 'Wi-Fi' : 'Bluetooth'} ${result ? 'enabled' : 'disabled'}`);
+    }
+    renderTiles();
+    renderWirelessPanel();
+    if (result && wirelessOpen === key) void refreshWireless();
+  }
+  $('#tiles').addEventListener('click', async event => {
+    const target = event.target instanceof Element ? event.target : null;
+    const tile = target?.closest('#tiles [data-k]');
+    if (!tile || !['wifi', 'bt'].includes(tile.dataset.k)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (wirelessBusy) return;
+    const key = tile.dataset.k;
+    toggleWirelessPanel(key);
+    $('#tiles [data-k="' + key + '"]')?.focus({ preventScroll: true });
+    if (wirelessOpen) await refreshWireless();
+  }, true);
+  $('#wireless-popover').onclick = async event => {
+    const button = event.target.closest('[data-action]');
+    if (!button || wirelessBusy) return;
+    const action = button.dataset.action;
+    if (action === 'wifi-network') {
+      const network = ui.controls?.wifi?.networks?.find(item => item.name === button.dataset.ssid);
+      if (!network) { toast('That network is no longer available. Refresh and try again.'); return; }
+      if (network.saved) {
+        wifiConnectionAttempt = network.name;
+        wirelessBusy = true;
+        renderWirelessPanel();
+        const result = await safeCall(() => api.wireless.connectWifi({ ssid: network.name }), `Could not connect to ${network.name}`);
+        wirelessBusy = false;
+        wifiConnectionAttempt = null;
+        if (result?.connected) toast(`Connected to ${network.name}`);
+        await refreshWireless();
+      } else if (network.secure) {
+        selectedNetwork = network;
+        renderWirelessPanel();
+        $('#wifi-password')?.focus();
+      } else {
+        wifiConnectionAttempt = network.name;
+        wirelessBusy = true;
+        renderWirelessPanel();
+        const result = await safeCall(() => api.wireless.connectWifi({ ssid: network.name }), `Could not connect to ${network.name}`);
+        wirelessBusy = false;
+        wifiConnectionAttempt = null;
+        if (result?.connected) toast(`Connected to ${network.name}`);
+        await refreshWireless();
+      }
       return;
     }
-    const area = settingsArea[key];
-    if (area) await safeCall(() => api.windows.settings(area), 'Could not open Windows settings');
+    if (action === 'wifi-cancel') {
+      selectedNetwork = null;
+      renderWirelessPanel();
+      return;
+    }
+    if (action === 'wifi-password-toggle') {
+      const input = $('#wifi-password');
+      if (!input) return;
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      button.textContent = show ? 'Hide' : 'Show';
+      button.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+      button.setAttribute('aria-pressed', String(show));
+      input.focus();
+      return;
+    }
+    if (action === 'wifi-toggle' || action === 'bluetooth-toggle') {
+      const kind = action === 'wifi-toggle' ? 'WiFi' : 'Bluetooth';
+      await toggleWirelessRadio(kind);
+      return;
+    }
+    if (action === 'wireless-refresh') {
+      await refreshWireless(true);
+      return;
+    }
+    if (action === 'wifi-disconnect') {
+      wirelessBusy = true;
+      renderWirelessPanel();
+      const result = await safeCall(() => api.wireless.disconnectWifi(), 'Could not disconnect Wi-Fi');
+      wirelessBusy = false;
+      if (result) toast('Disconnected from Wi-Fi');
+      await refreshWireless();
+      return;
+    }
+    if (action === 'bluetooth-pair') {
+      const deviceId = button.dataset.deviceId;
+      if (!deviceId) return;
+      wirelessBusy = true;
+      renderWirelessPanel();
+      const result = await safeCall(() => api.wireless.pairBluetooth(deviceId), 'Could not pair Bluetooth device');
+      wirelessBusy = false;
+      if (result) toast(`Paired ${result.name || 'Bluetooth device'}`);
+      await refreshWireless();
+    }
   };
+  $('#wireless-popover').onsubmit = async event => {
+    if (event.target.id !== 'wifi-password-form' || wirelessBusy || !selectedNetwork) return;
+    event.preventDefault();
+    const ssid = selectedNetwork.name;
+    const password = $('#wifi-password').value;
+    wifiConnectionAttempt = ssid;
+    selectedNetwork = null;
+    wirelessBusy = true;
+    renderWirelessPanel();
+    const result = await safeCall(() => api.wireless.connectWifi({ ssid, password }), `Could not connect to ${ssid}`);
+    wirelessBusy = false;
+    wifiConnectionAttempt = null;
+    if (result?.connected) toast(`Connected to ${ssid}`);
+    await refreshWireless();
+  };
+  document.addEventListener('click', event => {
+    const path = event.composedPath();
+    if (wirelessOpen && !path.includes($('#tiles')) && !path.includes($('#wireless-popover'))) {
+      closeWirelessPanel();
+    }
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && wirelessOpen) {
+      closeWirelessPanel();
+    }
+  });
   let volumeTimer, brightnessTimer, volumeRequest = 0;
   $('#vol').addEventListener('input', () => {
     const request = ++volumeRequest;

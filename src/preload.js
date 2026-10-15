@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('notch', Object.freeze({
   system: Object.freeze({ stats: invoke('notch:system:stats') }),
   media: Object.freeze({ get: invoke('notch:media:get'), control: invoke('notch:media:control'), onChanged: callback => subscribe('notch:media:changed', callback) }),
   controls: Object.freeze({ get: invoke('notch:controls:get'), volume: invoke('notch:controls:volume'), mute: invoke('notch:controls:mute'), brightness: invoke('notch:controls:brightness') }),
+  wireless: Object.freeze({ get: invoke('notch:wireless:get'), radio: invoke('notch:wireless:radio'), scanWifi: invoke('notch:wireless:wifi:scan'), connectWifi: invoke('notch:wireless:wifi:connect'), disconnectWifi: invoke('notch:wireless:wifi:disconnect'), scanBluetooth: invoke('notch:wireless:bluetooth:scan'), pairBluetooth: invoke('notch:wireless:bluetooth:pair') }),
   windows: Object.freeze({ settings: invoke('notch:windows:settings') }),
   apps: Object.freeze({ list: invoke('notch:apps:list'), launch: invoke('notch:apps:launch'), pick: invoke('notch:apps:pick'), openPath: invoke('notch:apps:openPath') }),
   wallpaper: Object.freeze({ pick: invoke('notch:wallpaper:pick'), apply: invoke('notch:wallpaper:apply'), applyDataUrl: invoke('notch:wallpaper:applyDataUrl'), preview: invoke('notch:wallpaper:preview') }),

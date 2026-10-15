@@ -9,6 +9,45 @@
 .setting-actions{display:flex;gap:8px;align-items:center;margin-top:12px}
 .setting-actions button,.app-add,.desktop-apply,.reminder-add,.reminder-form button{border:0;border-radius:10px;background:var(--gold);color:var(--ink);padding:8px 12px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
 .setting-note,.native-empty{color:var(--mut);font-size:12px;padding:12px 4px}
+.wireless-popover{max-height:0;opacity:0;overflow:hidden;transform:translateY(-6px);pointer-events:none;transition:max-height .26s cubic-bezier(.2,.8,.2,1),opacity .18s,transform .22s,margin .22s}
+.wireless-popover.on{max-height:360px;opacity:1;overflow:auto;transform:none;pointer-events:auto;margin-top:10px}
+.wireless-chevron{display:grid;place-items:center;transition:transform .2s,color .2s;color:var(--mut)}
+.tg[aria-expanded=true] .wireless-chevron{transform:rotate(180deg);color:var(--gold)}
+.wireless-disclosure[aria-expanded=true] .wireless-chevron{transform:rotate(180deg)}
+.wireless-card{padding:12px;background:color-mix(in srgb,var(--tile) 88%,transparent);border:1px solid rgba(255,255,255,.08);border-radius:16px;box-shadow:0 10px 28px rgba(0,0,0,.16)}
+.wireless-head,.wireless-actions,.wireless-row{display:flex;align-items:center;gap:8px}
+.wireless-head{justify-content:space-between;margin-bottom:8px}
+.wireless-title{font-size:12px;font-weight:700}.wireless-caption{font-size:10px;color:var(--mut);margin-top:2px}
+.wireless-actions button,.wireless-row button,.wireless-form button{border:0;border-radius:9px;background:rgba(255,255,255,.09);color:var(--tx);padding:7px 10px;font:inherit;font-size:11px;font-weight:600;cursor:pointer;transition:background .16s,transform .16s}
+.wireless-actions button:hover,.wireless-row button:hover,.wireless-form button:hover{background:color-mix(in srgb,var(--gold) 22%,var(--tile))}
+.wireless-actions button:disabled,.wireless-row button:disabled,.wireless-form button:disabled{opacity:.48;cursor:not-allowed}
+.wireless-actions button:active,.wireless-row button:active,.wireless-form button:active{transform:scale(.97)}
+.wireless-actions .wireless-refresh{padding:7px 10px}
+.wireless-actions .wireless-switch{position:relative;width:38px;height:22px;flex:none;padding:0;border:1px solid rgba(255,255,255,.24);border-radius:999px;background:rgba(128,128,128,.34);transition:background .18s,border-color .18s}
+.wireless-actions .wireless-switch:hover{background:rgba(128,128,128,.48)}
+.wireless-actions .wireless-switch[aria-checked=true]{border-color:var(--gold);background:var(--gold)}
+.wireless-switch span{position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .18s cubic-bezier(.2,.8,.2,1)}
+.wireless-switch[aria-checked=true] span{transform:translateX(16px);background:var(--ink)}
+.wireless-switch:disabled{opacity:.45;cursor:not-allowed}
+.wireless-switch:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+.wireless-list{max-height:154px;overflow:auto;display:grid;gap:3px;padding-right:2px}
+.wireless-row{min-height:34px;padding:4px 6px;border-radius:9px}
+.wireless-row:hover{background:rgba(255,255,255,.055)}
+.wireless-row button{margin-left:auto;padding:6px 10px;background:color-mix(in srgb,var(--gold) 18%,var(--tile));flex:none}
+.wireless-connected{font-size:10px;color:var(--gold);white-space:nowrap}
+.wireless-connected span{font-size:8px;margin-right:4px}
+.wireless-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:600}
+.wireless-meta{margin-left:auto;color:var(--mut);font-size:10px;white-space:nowrap}
+.wireless-form{display:flex;align-items:center;gap:6px;margin-top:8px}
+.wireless-password{display:flex;align-items:center;min-width:0;flex:1;border:1px solid rgba(255,255,255,.12);border-radius:9px;background:rgba(0,0,0,.16)}
+.wireless-password input{min-width:0;flex:1;border:0;background:none;color:var(--tx);padding:7px 9px;font:inherit;font-size:11px;outline:0}
+.wireless-password button{flex:none;border:0;border-radius:7px;background:none;color:var(--mut);padding:6px 8px;font:inherit;font-size:10px;cursor:pointer}
+.wireless-password button:hover{color:var(--tx);background:rgba(255,255,255,.08)}
+.wireless-form input{min-width:0;flex:1;border:1px solid rgba(255,255,255,.12);border-radius:9px;padding:7px 9px;background:rgba(0,0,0,.16);color:var(--tx);font:inherit;font-size:11px}
+.wireless-empty{padding:10px 4px;color:var(--mut);font-size:11px}
+.wireless-spinner{display:inline-block;width:12px;height:12px;margin-right:8px;border:2px solid color-mix(in srgb,var(--gold) 28%,transparent);border-top-color:var(--gold);border-radius:50%;vertical-align:-2px;animation:wireless-spin .7s linear infinite}
+@keyframes wireless-spin{to{transform:rotate(360deg)}}
+.wireless-actions button:focus-visible,.wireless-row button:focus-visible,.wireless-form button:focus-visible,.wireless-form input:focus-visible,.wireless-password button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 .app-add{flex:none;padding:7px 10px}
 .ar3 .app-icon{width:32px;height:32px;object-fit:contain;border-radius:8px}
 .ar3 .app-fallback{width:32px;height:32px;border-radius:9px;background:rgba(255,255,255,.1);display:grid;place-items:center;font-size:13px;font-weight:700}
@@ -26,6 +65,7 @@
 .reminder-item b{color:var(--tx);font-weight:500}
 .reminder-item button{border:0;background:none;color:var(--mut);cursor:pointer}
 body.no-motion *,body.no-motion *::before,body.no-motion *::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+@media(prefers-reduced-motion:reduce){.wireless-spinner{animation-duration:.01ms}}
 
 /* Match Chromium scrollbars to the dark glass surface and remove its bright arrow buttons. */
 *{scrollbar-width:thin!important;scrollbar-color:color-mix(in srgb,var(--gold) 55%,transparent) transparent!important}

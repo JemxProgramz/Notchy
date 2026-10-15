@@ -34,7 +34,8 @@ Notch places a transparent, frameless island at the top of a selected display, b
 
 - Windows master-volume control through Core Audio.
 - Display brightness control when the active display supports the Windows monitor WMI interface.
-- Wi-Fi and Bluetooth status, with shortcuts to the corresponding Windows settings pages.
+- A single Wi-Fi tile opens an in-notch panel for radio control, nearby networks, saved connections, and password entry (including a show/hide control) for supported personal-security networks. A Windows native addon uses the WLAN API and Windows Runtime; connection status is verified without launching PowerShell, `netsh`, or Windows Settings.
+- A single Bluetooth tile opens an in-notch panel for radio control, nearby-device discovery, pairing, and paired-device connection status through the Windows Runtime native addon. Windows may request confirmation during pairing and manages per-device connection profiles.
 - Windows media-session integration where a compatible session is available.
 
 ### Desktop tools
@@ -57,6 +58,7 @@ Notch places a transparent, frameless island at the top of a selected display, b
 
 - Windows 10 or Windows 11.
 - Node.js **22.12.0 or newer** and npm.
+- Visual Studio Build Tools with **Desktop development with C++** and a Windows 10/11 SDK, required to compile the native wireless addon.
 
 ## Getting started
 
@@ -70,7 +72,7 @@ npm run check
 npm run dev
 ```
 
-`npm run check` validates JavaScript syntax, package metadata, renderer wiring, and the Windows icon.
+`npm run check` validates JavaScript syntax, package metadata, renderer/native-addon wiring, and the Windows icon. The `dev`, `start`, and build commands compile the Windows addon automatically.
 
 ## Build
 
@@ -88,6 +90,8 @@ npm run build:appx    # Optional, locally signed AppX package
 ```
 
 Build output is written to `dist/` and is excluded from version control.
+
+To compile the addon on its own, run `npm run build:native`. It uses stable Node-API and Windows WLAN/Windows Runtime APIs; no PowerShell or `netsh` process is used for Wi-Fi or Bluetooth operations. The compiled `.node` file is shipped as a native resource alongside Electron's ASAR archive.
 
 The AppX build creates a temporary self-signed signing certificate and removes its private key after the build. The generated certificate and package are local build artifacts. Windows requires trusting the certificate to install that package. The certificate is for local development and evaluation, not public distribution.
 
@@ -113,6 +117,16 @@ src/
 ├── main.js                         Main process and Windows integrations
 ├── preload.js                      Restricted renderer IPC bridge
 ├── media.ps1                       Windows media-session helper
+├── native/
+│   ├── binding.gyp                 Native addon build configuration
+│   ├── wireless_addon.cc           Node-API exports and input validation
+│   ├── wireless_operations.cc      Async operation dispatch and error delivery
+│   ├── wireless_wifi.cc            Windows WLAN discovery and connections
+│   ├── wireless_radio.cc           Windows radio state and controls
+│   ├── wireless_bluetooth.cc       Device discovery, pairing, and status
+│   ├── wireless_state.cc           Renderer-facing state serialization
+│   ├── wireless_common.cc          Shared Windows string and error helpers
+│   └── wireless_*.h                Native API and work-item declarations
 └── renderer/
     ├── index.html                  Interface and original renderer
     ├── native-integration.js       Electron/Windows renderer integration
@@ -135,7 +149,8 @@ scripts/                             Validation, build, and install helpers
 
 - Brightness adjustment depends on the active display and driver exposing Windows' monitor WMI interface; many external monitors do not.
 - GPU utilization is shown only when the installed driver exposes a usable reading. Notch does not estimate missing values.
-- Windows owns Wi-Fi and Bluetooth radio enable/disable controls. Notch reports status where available and opens Windows Settings for those controls.
+- Wi-Fi discovery, radio control, saved-profile connection, and supported personal-network setup use the Windows WLAN and Radio APIs through the native addon. Enterprise authentication modes are not configured by Notch.
+- Windows owns per-device Bluetooth connection behavior. Notch can toggle the radio, discover and pair devices in the notch, and report a paired device's connection status; individual audio/input connection profiles remain managed by Windows.
 - Media controls depend on a compatible Windows media session being active.
 - Display, power, and system-control behavior may be restricted by Windows policy or a remote session.
 
@@ -148,7 +163,9 @@ scripts/                             Validation, build, and install helpers
 | Brightness is unavailable | Check whether the active display and driver expose Windows monitor brightness controls. |
 | GPU utilization is missing | Check driver telemetry support; unavailable readings are not estimated. |
 | A wallpaper is not applied | Check Windows desktop-background policy and use a PNG, JPEG, or BMP image. |
-| Wi-Fi or Bluetooth cannot be toggled in Notch | Use the Windows Settings page opened by the relevant Notch control. |
+| Wi-Fi networks do not appear | Turn on the Wi-Fi radio and refresh the in-app network list. Scanning depends on Windows WLAN services and driver support. |
+| Bluetooth pairing or connection status is unavailable | Confirm Bluetooth is on and the device is discoverable. Windows may require confirmation and manages per-device connection profiles. |
+| The native addon build reports that Visual Studio is missing | Install Visual Studio Build Tools with the **Desktop development with C++** workload and a Windows 10/11 SDK, then run `npm run build:native`. |
 | A build cannot replace `Notch.exe` | Close running Notch instances from the project's `dist/` folder, then retry. |
 
 ## Contributing

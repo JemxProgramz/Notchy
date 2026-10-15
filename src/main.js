@@ -7,6 +7,25 @@ const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 
 const run = promisify(execFile);
+const runPowerShell = (script, options = {}) => run('powershell.exe', [
+  '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
+  Buffer.from(script, 'utf16le').toString('base64')
+], { windowsHide: true, timeout: 7000, ...options });
+let nativeWireless;
+if (process.platform === 'win32') {
+  try {
+    const addonPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'wireless.node')
+      : path.join(__dirname, 'native', 'build', 'Release', 'wireless.node');
+    nativeWireless = require(addonPath);
+  } catch (error) {
+    console.error('The Windows native wireless addon could not be loaded. Run npm run build:native before starting Notch:', error);
+  }
+}
+const wirelessAddon = () => {
+  if (!nativeWireless) throw new Error('The Windows wireless addon is unavailable. Rebuild Notch with npm run build:native.');
+  return nativeWireless;
+};
 const defaults = {
   startup: false, alwaysOnTop: true, clickThrough: false, animations: true,
   clipboardEnabled: true, clipboardLimit: 100, clipboardRetentionDays: 30,
@@ -25,6 +44,7 @@ let pendingOpen;
 let shuttingDown = false;
 let dataLoaded = false;
 let cpuLoadPrimed = false;
+let slowStats = { at: 0, graphics: null, drives: [], interfaces: [], processes: [], netStats: [], refreshing: false };
 let mediaProcess;
 let mediaState = { supported: null, active: false };
 let windowScene = { mode: 'idle', height: 22, wide: false };
@@ -121,7 +141,7 @@ function bounds(mode = 'idle', sceneHeight = 520, wide = false) {
   let height;
   if (mode === 'expanded') {
     width = Math.min(wide ? 964 : 784, Math.max(1, area.width - 24));
-    height = Math.min(area.height, 760, Math.max(200, Math.round(Number(sceneHeight) || 520)));
+    height = Math.min(Math.max(200, area.height - 8), Math.max(200, Math.round(Number(sceneHeight) || 520)));
   } else if (mode === 'peek') {
     width = Math.min(area.width, 420);
     height = Math.min(area.height, 164);
@@ -263,16 +283,31 @@ async function openExternal(value) {
 }
 
 async function systemStats(order = 'cpu') {
-  let load = await si.currentLoad();
+  const load = await si.currentLoad();
   if (!cpuLoadPrimed) {
-    await new Promise(resolve => setTimeout(resolve, 250));
-    load = await si.currentLoad();
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await si.currentLoad();
     cpuLoadPrimed = true;
   }
-  const [memory, graphics, drives, interfaces, processes, netStats] = await Promise.all([
-    si.mem(), si.graphics().catch(() => ({ controllers: [] })), si.fsSize().catch(() => []),
+  const memory = await si.mem();
+  // Graphics, disks, adapters, process tables, and link rates change slowly but
+  // are the expensive systeminformation calls. Refresh them on a timer and in
+  // the background so a routine poll only pays for CPU and memory, and never
+  // stalls behind a process/WMI sweep.
+  const slowTtl = Math.max(5000, Number(config.monitorRefreshMs) || 3000);
+  const refreshSlowStats = () => Promise.all([
+    si.graphics().catch(() => ({ controllers: [] })), si.fsSize().catch(() => []),
     si.networkInterfaces().catch(() => []), si.processes().catch(() => ({ list: [] })), si.networkStats().catch(() => [])
-  ]);
+  ]).then(([graphics, drives, interfaces, processes, netStats]) => {
+    slowStats = { at: Date.now(), graphics, drives, interfaces, processes, netStats, refreshing: false };
+  }).catch(() => { slowStats.refreshing = false; });
+  if (!slowStats.at) {
+    await refreshSlowStats();
+  } else if (!slowStats.refreshing && Date.now() - slowStats.at >= slowTtl) {
+    slowStats.refreshing = true;
+    void refreshSlowStats();
+  }
+  const { graphics, drives, interfaces, processes, netStats } = slowStats;
   const gpu = graphics.controllers?.[0] || {};
   const disk = drives.find(x => String(x.mount).toUpperCase() === 'C:') || drives.find(x => x.mount === '/') || drives[0];
   const netRows = (netStats || []).filter(x => x.iface && !/loopback|lo$/i.test(x.iface));
@@ -388,33 +423,76 @@ function latestWriter(operation) {
 
 const setAudioVolume = latestWriter(value => audioVolume('set', value));
 
+const controlStateScript = `$ErrorActionPreference='SilentlyContinue'
+$code=@'
+${volumeCode}
+'@
+Add-Type -TypeDefinition $code 2>$null
+$volume=$null
+$muted=$null
+try { $volume=[NotchAudioBridge]::GetMasterVolumePercent(); $muted=[NotchAudioBridge]::GetMute() } catch { }
+$brightness=$null
+$supported=$false
+try {
+  $bs=@(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness -ErrorAction SilentlyContinue | Where-Object { $_.Active } | Sort-Object InstanceName)
+  if ($bs.Count -gt 0) { $brightness=[int]$bs[0].CurrentBrightness; $supported=$true }
+} catch { }
+[pscustomobject]@{ volume=$volume; muted=$muted; brightness=$brightness; brightnessSupported=$supported } | ConvertTo-Json -Compress`;
+
 async function getControls() {
-  const result = { wifi: { connected: false, name: null }, bluetooth: { available: false, devices: [] }, volume: null, muted: null, brightness: null, brightnessSupported: false };
+  const result = { wifi: { available: false, radioAvailable: false, enabled: false, connected: false, name: null, interfaceName: null, networks: [] }, bluetooth: { available: false, enabled: false, devices: [] }, volume: null, muted: null, brightness: null, brightnessSupported: false };
   if (process.platform !== 'win32') return result;
   try {
-    const { stdout } = await run('netsh.exe', ['wlan', 'show', 'interfaces'], { windowsHide: true, timeout: 4000 });
-    const state = stdout.match(/^\s*State\s*:\s*(.+)$/im)?.[1]?.trim();
-    result.wifi.connected = /^connected$/i.test(state || '');
-    result.wifi.name = result.wifi.connected ? (stdout.match(/^\s*SSID\s*:\s*(.+)$/im)?.[1]?.trim() || null) : null;
-  } catch { /* Wi-Fi may be unavailable or not connected */ }
+    Object.assign(result, await getWirelessState());
+  } catch (error) { console.warn('Could not query Windows wireless controls:', error.message); }
   try {
-    const ps = "$d=Get-PnpDevice -Class Bluetooth -ErrorAction Stop | Where-Object Status -eq 'OK' | Select-Object -ExpandProperty FriendlyName; ConvertTo-Json -Compress @($d)";
-    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 5000 });
-    const parsed = JSON.parse(stdout || '[]');
-    result.bluetooth.devices = (Array.isArray(parsed) ? parsed : [parsed]).filter(Boolean);
-    result.bluetooth.available = true;
-  } catch { /* Bluetooth query is not available on every Windows install */ }
-  try { Object.assign(result, await audioVolume('state')); } catch (error) { console.warn('Could not query Windows master volume:', error.message); }
-  try {
-    const ps = "$bs=@(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness -ErrorAction SilentlyContinue | Where-Object Active | Sort-Object InstanceName); $ms=@(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue | Where-Object Active); $pair=$null; foreach($b in $bs){$m=$ms | Where-Object InstanceName -eq $b.InstanceName | Select-Object -First 1; if($m){$pair=[pscustomobject]@{brightness=$b;methods=$m};break}}; if(!$pair){[pscustomobject]@{brightness=$null;supported=$false}|ConvertTo-Json -Compress;exit 0}; [pscustomobject]@{brightness=[int]$pair.brightness.CurrentBrightness;supported=$true}|ConvertTo-Json -Compress";
-    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 5000 });
+    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(controlStateScript, 'utf16le').toString('base64')], { windowsHide: true, timeout: 8000 });
     const state = JSON.parse(stdout.trim());
-    if (state.supported && Number.isFinite(state.brightness)) {
+    if (Number.isFinite(state.volume)) result.volume = state.volume;
+    if (typeof state.muted === 'boolean') result.muted = state.muted;
+    if (state.brightnessSupported && Number.isFinite(state.brightness)) {
       result.brightness = state.brightness;
       result.brightnessSupported = true;
     }
-  } catch (error) { console.warn('Could not query Windows display brightness support:', error.message); }
+  } catch (error) { console.warn('Could not query Windows sound and brightness controls:', error.message); }
   return result;
+}
+
+async function getWirelessState() {
+  const state = await wirelessAddon().getState();
+  if (state.wifi.radioError) console.warn('Could not query the Windows Wi-Fi radio:', state.wifi.radioError);
+  if (state.bluetooth.error) console.warn('Could not query the Windows Bluetooth radio:', state.bluetooth.error);
+  return state;
+}
+
+async function setWirelessRadio(kind, enabled) {
+  if (!['WiFi', 'Bluetooth'].includes(kind) || typeof enabled !== 'boolean') throw new Error('Invalid wireless radio request');
+  return wirelessAddon().setRadio(kind, enabled);
+}
+
+async function connectWifi(details) {
+  if (!details || typeof details.ssid !== 'string' || !details.ssid.trim() || details.ssid.length > 32) {
+    throw new Error('Choose a valid Wi-Fi network');
+  }
+  if (details.password !== undefined && typeof details.password !== 'string') throw new Error('Enter a valid Wi-Fi password');
+  return wirelessAddon().connectWifi({ ...details, password: details.password || '' });
+}
+
+async function disconnectWifi() {
+  return wirelessAddon().disconnectWifi();
+}
+
+async function scanBluetoothDevices(includeNearby) {
+  return wirelessAddon().scanBluetooth(includeNearby === true);
+}
+
+async function scanWifiNetworks() {
+  return wirelessAddon().scanWifi();
+}
+
+async function pairBluetoothDevice(deviceId) {
+  if (typeof deviceId !== 'string' || !deviceId || deviceId.length > 1024) throw new Error('Choose a valid Bluetooth device');
+  return wirelessAddon().pairBluetooth(deviceId);
 }
 
 async function setBrightness(value) {
@@ -556,6 +634,13 @@ handleIpc('notch:controls:get', getControls);
 handleIpc('notch:controls:volume', async (_event, value) => setAudioVolume(value));
 handleIpc('notch:controls:mute', async (_event, muted) => audioVolume('mute', !!muted));
 handleIpc('notch:controls:brightness', async (_event, value) => setDisplayBrightness(value));
+handleIpc('notch:wireless:get', getWirelessState);
+handleIpc('notch:wireless:radio', async (_event, kind, enabled) => setWirelessRadio(kind, enabled));
+handleIpc('notch:wireless:wifi:scan', scanWifiNetworks);
+handleIpc('notch:wireless:wifi:connect', async (_event, details) => connectWifi(details));
+handleIpc('notch:wireless:wifi:disconnect', disconnectWifi);
+handleIpc('notch:wireless:bluetooth:scan', scanBluetoothDevices);
+handleIpc('notch:wireless:bluetooth:pair', async (_event, deviceId) => pairBluetoothDevice(deviceId));
 handleIpc('notch:windows:settings', async (_event, area) => {
   const uris = { wifi: 'ms-settings:network-wifi', bluetooth: 'ms-settings:bluetooth', audio: 'ms-settings:sound', nightlight: 'ms-settings:nightlight', display: 'ms-settings:display', power: 'ms-settings:powersleep', startup: 'ms-settings:startupapps' };
   if (!uris[area]) throw new Error('Unsupported Windows settings page');

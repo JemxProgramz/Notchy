@@ -1,6 +1,9 @@
 node_modules/
 /release*/
 /dist/
+/dist-*/
+/graphify-out/
+/src/native/build/
 /coverage/
 *.log
 npm-debug.log*

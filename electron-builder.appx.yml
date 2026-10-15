@@ -10,6 +10,9 @@ files:
   - src/**/*
   - assets/**/*
   - package.json
+extraResources:
+  - from: src/native/build/Release/wireless.node
+    to: wireless.node
 win:
   icon: assets/notch.ico
   target: appx
