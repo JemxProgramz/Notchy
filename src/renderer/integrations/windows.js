@@ -3,8 +3,13 @@
   const $$ = selector => [...document.querySelectorAll(selector)];
   const api = window.notch;
   if (!api) return;
+  window.__notchExternalAudioLevels = null;
+  api.media.onLevels(levels => {
+    window.__notchExternalAudioLevels = Array.isArray(levels) ? levels : null;
+  });
 
   const ui = { settings: {}, controls: null, stats: null, media: null };
+  let refreshApps = () => {};
   const toast = message => {
     const node = $('#toast');
     if (!node) return;
@@ -23,126 +28,31 @@
     if (name !== 'Controls' && wirelessOpen) {
       closeWirelessPanel();
     }
-    $$('#nav button').forEach(button => button.classList.toggle('on', button.dataset.t === name));
+    $$('#nav button').forEach(button => {
+      const active = button.dataset.t === name;
+      button.classList.toggle('on', active);
+      if (active) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
     $$('.v').forEach(view => view.classList.toggle('on', view.id === `v-${name.toLowerCase()}`));
     $('#isl').classList.toggle('wide', ['Today', 'Stats', 'Clipboard', 'Wallpaper', 'Settings'].includes(name));
     if (name === 'Clipboard') refreshClipboard();
     if (name === 'Apps') refreshApps();
     if (name === 'Today') renderReminders();
+    if (name === 'Stats' && typeof refreshStats === 'function') refreshStats();
     try { rise(); fit(); setTimeout(fit, 380); } catch { /* Early startup */ }
   }
-  if (Array.isArray(T) && !T.includes('Settings')) T.push('Settings');
-  if (!$('#nav [data-t="Settings"]')) {
-    const button = document.createElement('button');
-    button.dataset.t = 'Settings';
-    button.textContent = 'Settings';
-    $('#nav').append(button);
-  }
-  if (!$('#v-settings')) {
-    const section = document.createElement('section');
-    section.className = 'v';
-    section.id = 'v-settings';
-    section.innerHTML = `
-      <div class="settings-grid">
-        <div class="tile settings-card"><h3>Appearance</h3>
-          <label class="setting-row"><span>Theme<small>Apply to the Notch interface</small></span><select data-setting="theme"><option value="dark">Dark</option><option value="light">Light</option><option value="system">Follow Windows</option></select></label>
-          <label class="setting-row"><span>Animations</span><input type="checkbox" data-setting="animations"></label>
-          <label class="setting-row"><span>Time format</span><select data-setting="timeFormat"><option value="12h">12 hour</option><option value="24h">24 hour</option></select></label>
-          <label class="setting-row"><span>Display</span><select data-setting="displayId"><option value="">Primary display</option></select></label>
-        </div>
-        <div class="tile settings-card"><h3>Desktop</h3>
-          <label class="setting-row"><span>Start with Windows</span><input type="checkbox" data-setting="startup"></label>
-          <label class="setting-row"><span>Always on top</span><input type="checkbox" data-setting="alwaysOnTop"></label>
-          <label class="setting-row"><span>Click through</span><input type="checkbox" data-setting="clickThrough"></label>
-          <label class="setting-row"><span>Open shortcut<small>Electron accelerator, e.g. Ctrl+Shift+Space</small></span><input type="text" data-setting="globalShortcut" spellcheck="false"></label>
-        </div>
-        <div class="tile settings-card"><h3>Privacy and reminders</h3>
-          <label class="setting-row"><span>Clipboard history<small>Text stays on this PC</small></span><input type="checkbox" data-setting="clipboardEnabled"></label>
-          <label class="setting-row"><span>Keep history for</span><select data-setting="clipboardRetentionDays"><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select></label>
-          <label class="setting-row"><span>Notifications</span><input type="checkbox" data-setting="notifications"></label>
-        </div>
-        <div class="tile settings-card"><h3>Monitoring and about</h3>
-          <label class="setting-row"><span>Refresh interval</span><select data-setting="monitorRefreshMs"><option value="1000">1 second</option><option value="3000">3 seconds</option><option value="5000">5 seconds</option><option value="10000">10 seconds</option></select></label>
-          <p id="about-notch" class="setting-note">Notch</p>
-          <div class="setting-actions"><button type="button" id="settings-reset">Restore defaults</button></div>
-        </div>
-      </div>`;
-    $('#in').append(section);
-  }
-
-  function applyTheme() {
-    const preference = ui.settings.theme || 'dark';
-    const dark = preference === 'system'
-      ? matchMedia('(prefers-color-scheme: dark)').matches
-      : preference === 'dark';
-    S.dark = dark ? 1 : 0;
-    $('#isl').classList.toggle('light', !dark);
-    document.body.classList.toggle('no-motion', ui.settings.animations === false);
-  }
-  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (ui.settings.theme === 'system') applyTheme();
+  const settingsPage = window.NotchPages.settings({
+    api, ui, $, $$, S, safeCall, toast,
+    refreshClipboard: () => refreshClipboard(),
+    renderTiles: () => renderTiles()
   });
-  async function saveSetting(patch) {
-    const saved = await safeCall(() => api.settings.save(patch), 'Could not save setting');
-    if (!saved) return false;
-    ui.settings = saved;
-    window.__notchSettings = saved;
-    window.dispatchEvent(new Event('notch-settings'));
-    applyTheme();
-    if ('clipboardEnabled' in patch && patch.clipboardEnabled) refreshClipboard();
-    renderTiles();
-    return true;
-  }
-  async function loadSettings() {
-    const settings = await safeCall(() => api.settings.get(), 'Could not load settings');
-    if (!settings) return;
-    ui.settings = settings;
-    window.__notchSettings = settings;
-    window.dispatchEvent(new Event('notch-settings'));
-    applyTheme();
-    $$('[data-setting]').forEach(input => {
-      const key = input.dataset.setting;
-      const value = settings[key];
-      if (input.type === 'checkbox') input.checked = !!value;
-      else if (key === 'displayId') input.value = value == null ? '' : String(value);
-      else if (value != null) input.value = String(value);
-    });
-    const version = await safeCall(() => api.version(), 'Could not read version');
-    if (version) $('#about-notch').textContent = `Notch ${version} · Windows desktop utility`;
-    const displays = await safeCall(() => api.displays(), 'Could not list displays');
-    if (displays) {
-      const select = $('[data-setting="displayId"]');
-      select.replaceChildren(new Option('Primary display', ''));
-      displays.forEach(display => select.add(new Option(display.label, String(display.id))));
-      select.value = settings.displayId == null ? '' : String(settings.displayId);
-    }
-    renderTiles();
-  }
+  const { loadSettings, saveSetting } = settingsPage;
   $('#nav').onclick = event => {
     const button = event.target.closest('button[data-t]');
-    if (!button) return;
-    selectTab(button.dataset.t);
+    if (button) selectTab(button.dataset.t);
   };
   tab = selectTab;
-  $('#v-settings').addEventListener('change', async event => {
-    const input = event.target.closest('[data-setting]');
-    if (!input) return;
-    const key = input.dataset.setting;
-    let value = input.type === 'checkbox' ? input.checked : input.value;
-    if (['clipboardRetentionDays', 'monitorRefreshMs'].includes(key)) value = Number(value);
-    if (key === 'displayId') value = value === '' ? null : Number(value);
-    if (await saveSetting({ [key]: value })) toast('Setting saved');
-    else loadSettings();
-  });
-  $('#settings-reset').onclick = async () => {
-    const defaults = {
-      startup: false, alwaysOnTop: true, clickThrough: false, animations: true,
-      clipboardEnabled: true, clipboardLimit: 100, clipboardRetentionDays: 30,
-      monitorRefreshMs: 3000, globalShortcut: 'CommandOrControl+Shift+Space',
-      notifications: true, timeFormat: '12h', theme: 'dark', displayId: null
-    };
-    if (await saveSetting(defaults)) { await loadSettings(); toast('Defaults restored'); }
-  };
 
   /* Real Windows control state and actions. */
   const settingsArea = { night: 'nightlight' };
@@ -165,8 +75,8 @@
     const labels = {
       wifi: wirelessOpen === 'wifi' && wirelessLoading ? 'Searching for networks' : wifi.connected ? `Connected · ${wifi.name || 'Wi-Fi'}` : !wifi.available || !wifi.radioAvailable ? 'Wireless control unavailable' : !wifi.enabled ? 'Networks paused' : wifiNetworks ? pluralize(wifiNetworks, 'network') + ' nearby' : 'Refresh to find networks',
       bt: wirelessOpen === 'bt' && wirelessLoading ? 'Checking devices' : !bluetooth.available ? 'Not available on this PC' : !bluetooth.enabled ? 'Devices paused' : bluetoothDevices ? pluralize(bluetoothDevices, 'device') + ' detected' : 'No devices detected',
-      night: 'Open Windows settings',
-      dark: ui.settings.theme === 'light' ? 'Light theme' : 'Dark theme'
+      night: 'Opens the Windows night light page',
+      dark: ui.settings.theme === 'light' ? 'Light theme' : ui.settings.theme === 'system' ? 'Follows Windows' : 'Dark theme'
     };
     const tile = (key, icon, title) => {
       if (key === 'wifi') {
@@ -175,11 +85,48 @@
       if (key === 'bt') {
         return `<div style="grid-column:span 3"><button class="tg ${bluetooth.enabled ? 'on' : ''}" data-k="bt" type="button" aria-expanded="${wirelessOpen === 'bt'}" aria-controls="wireless-popover"><span class="ic">${ic(icon)}</span><span class="tx">${title}<small>${escapeMarkup(labels.bt)}</small></span><span class="wireless-chevron" aria-hidden="true">${ic('ch')}</span></button></div>`;
       }
-      return `<div style="grid-column:span 3"><button class="tg ${key === 'dark' && S.dark ? 'on' : ''}" data-k="${key}" type="button"><span class="ic">${ic(icon)}</span><span class="tx">${title}<small>${escapeMarkup(labels[key])}</small></span></button></div>`;
+      const on = key === 'dark' && !!S.dark;
+      return `<div style="grid-column:span 3"><button class="tg ${on ? 'on' : ''}" data-k="${key}" type="button"${key === 'dark' ? ` aria-pressed="${on}"` : ''}><span class="ic">${ic(icon)}</span><span class="tx">${title}<small>${escapeMarkup(labels[key])}</small></span></button></div>`;
     };
     $('#tiles').innerHTML = tile('wifi', 'wifi', 'Wi-Fi') + tile('bt', 'bt', 'Bluetooth') + tile('night', 'moon', 'Night Light') + tile('dark', 'dark', 'Notch theme');
-    $('#spk').textContent = controls.volume == null ? 'Windows sound controls' : `Windows master volume · ${controls.volume}%`;
+    renderSpeakerStatus();
   }
+  // Windows sound and brightness controls can be missing on some PCs or displays.
+  // When that happens, keep the reason visible and offer a one-click re-check
+  // instead of a silent "Unavailable" with no path forward.
+  function renderSpeakerStatus() {
+    const host = $('#spk');
+    if (!host) return;
+    const controls = ui.controls;
+    if (!controls) {
+      host.textContent = 'Windows sound controls';
+      return;
+    }
+    const issues = [];
+    if (controls.volume == null) issues.push('Windows master volume is unavailable (no audio output was reported)');
+    if (controls.brightness == null || controls.brightnessSupported === false) issues.push('Brightness is unavailable on this display (external monitors often do not support it)');
+    if (!issues.length) {
+      host.textContent = controls.volume == null ? 'Windows sound controls' : `Windows master volume · ${controls.volume}%`;
+      return;
+    }
+    host.replaceChildren();
+    const note = document.createElement('span');
+    note.textContent = issues.join(' · ');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'native-retry';
+    retry.textContent = 'Check again';
+    retry.onclick = () => {
+      toast('Checking Windows controls…');
+      refreshControls();
+      refreshWireless();
+    };
+    host.append(note, retry);
+  }
+  /* The original inline renderer repaints the tiles with sample Wi-Fi and audio
+     data after legacy interactions. Point every one of those call sites at the
+     native renderer so the panel never falls back to placeholder state. */
+  tiles = renderTiles;
   function renderWirelessPanel() {
     const panel = $('#wireless-popover');
     if (!wirelessOpen) {
@@ -337,11 +284,26 @@
   $('#tiles').addEventListener('click', async event => {
     const target = event.target instanceof Element ? event.target : null;
     const tile = target?.closest('#tiles [data-k]');
-    if (!tile || !['wifi', 'bt'].includes(tile.dataset.k)) return;
+    if (!tile) return;
+    const key = tile.dataset.k;
+    if (key === 'night') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      await safeCall(() => api.windows.settings('nightlight'), 'Could not open Windows night light settings');
+      return;
+    }
+    if (key === 'dark') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const theme = S.dark ? 'light' : 'dark';
+      await saveSetting({ theme });
+      toast(`${theme === 'dark' ? 'Dark' : 'Light'} theme applied`);
+      return;
+    }
+    if (!['wifi', 'bt'].includes(key)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     if (wirelessBusy) return;
-    const key = tile.dataset.k;
     toggleWirelessPanel(key);
     $('#tiles [data-k="' + key + '"]')?.focus({ preventScroll: true });
     if (wirelessOpen) await refreshWireless();
@@ -445,9 +407,27 @@
     }
   });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && wirelessOpen) {
-      closeWirelessPanel();
-    }
+    if (event.key !== 'Escape') return;
+    if (wirelessOpen) { closeWirelessPanel(); return; }
+    if ($('#dd').classList.contains('on')) return; // Legacy dropdown closes itself first.
+    const islandNode = $('#isl');
+    if (!islandNode.classList.contains('open') && !islandNode.classList.contains('peek')) return;
+    if (document.activeElement instanceof HTMLElement && islandNode.contains(document.activeElement)) document.activeElement.blur();
+    islandNode.classList.remove('open', 'peek');
+    mclose();
+    try { fit(); } catch { /* Geometry may not be ready yet. */ }
+  });
+  /* Arrow keys move between the top-level sections while the tab strip has focus. */
+  $('#nav').addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const buttons = $$('#nav button');
+    const index = buttons.indexOf(document.activeElement);
+    if (index < 0) return;
+    event.preventDefault();
+    const last = buttons.length - 1;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? last : (index + (event.key === 'ArrowRight' ? 1 : last)) % buttons.length;
+    buttons[next].focus({ preventScroll: true });
+    selectTab(buttons[next].dataset.t);
   });
   let volumeTimer, brightnessTimer, volumeRequest = 0;
   $('#vol').addEventListener('input', () => {
@@ -495,72 +475,277 @@
     const hours = Math.floor(total / 3600);
     return hours ? `${hours}:${String(Math.floor(total / 60) % 60).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}` : `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
   };
+  const sourceNames = [
+    [/zunemusic|windowsmediaplayer|media\s*player/i, 'Media Player'],
+    [/zunevideo|films|movies/i, 'Movies & TV'],
+    [/spotify/i, 'Spotify'],
+    [/msedge|edge/i, 'Edge'],
+    [/chrome/i, 'Chrome'],
+    [/firefox/i, 'Firefox'],
+    [/brave/i, 'Brave'],
+    [/vlc/i, 'VLC'],
+    [/musicbee/i, 'MusicBee'],
+    [/foobar/i, 'foobar2000'],
+    [/itunes|apple/i, 'Apple Music'],
+    [/amazon/i, 'Amazon Music'],
+    [/youtube/i, 'YouTube'],
+    [/groove/i, 'Groove Music']
+  ];
+  function friendlySource(raw) {
+    const value = String(raw || '');
+    for (const [pattern, name] of sourceNames) if (pattern.test(value)) return name;
+    const tail = value.split(/[!\\/]/).pop() || value;
+    const cleaned = tail
+      .replace(/_[a-z0-9]{13}$/i, '')
+      .replace(/\.exe$/i, '')
+      .replace(/[._]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned || 'Media';
+  }
+  function renderLocalLabel() {
+    /* The built-in synthesized player is opt-in: until the user presses play
+       (or an external session takes over) the island reads as idle instead of
+       pretending a track is playing. */
+    const playing = !!S.play;
+    $$('.mt h4').forEach(node => node.textContent = playing ? ST[si].n : 'Nothing playing');
+    $$('.mt p').forEach(node => node.textContent = playing ? ST[si].a : 'Start a player, or press play for lofi radio');
+    $$('.art,.ca').forEach(node => { node.classList.remove('has-art'); node.style.backgroundColor = ''; node.style.backgroundImage = ''; node.style.background = GR[si]; });
+    if (!playing) {
+      ['#ps', '#pkt', '#pd', '#pkd'].forEach(id => { const node = $(id); if (node) node.textContent = '0:00'; });
+      ['#pb', '#pkb'].forEach(id => { const node = $(id); if (node) node.style.width = '0%'; });
+    }
+  }
+  /* Album art flows through a single helper so every surface (expanded tile,
+     peek card, compact island chip) stays in sync, and so a missing thumbnail
+     falls back to a labelled gradient instead of a blank square. */
+  function applyCover(cover) {
+    $$('.art,.ca').forEach(node => {
+      if (cover) {
+        node.classList.add('has-art');
+        node.style.backgroundColor = 'rgba(0,0,0,.35)';
+        node.style.backgroundImage = `url("${cover}")`;
+      } else {
+        node.classList.remove('has-art');
+        node.style.backgroundColor = '';
+        node.style.backgroundImage = '';
+        node.style.background = GR[si];
+      }
+    });
+  }
+
+  /* Windows only refreshes the media timeline a few times a second, so a raw
+     poll leaves the progress bar frozen and jumping between samples. A local
+     wall-clock clock extrapolates from the last sample and re-syncs whenever a
+     fresh update arrives, keeping the bar smooth and in step with playback. */
+  let mediaClock = null;
+  function syncMediaClock(media) {
+    if (!media?.active) { mediaClock = null; mediaScrubbing = false; return; }
+    if (mediaScrubbing) return;
+    const duration = Number(media.duration) || 0;
+    const updatedAt = Number(media.updatedAt);
+    const age = Number.isFinite(updatedAt) && updatedAt > 0 ? Math.max(0, Date.now() - updatedAt) / 1000 : 0;
+    const position = (Number(media.position) || 0) + (media.playing ? age : 0);
+    mediaClock = {
+      position: duration > 0 ? Math.min(position, duration) : position,
+      duration,
+      playing: !!media.playing,
+      at: performance.now()
+    };
+  }
+  let mediaScrubbing = false;
+  let mediaSeekPreview = 0;
+  let pendingTimelineChange = null;
+  const mediaIdentity = media => [media?.source, media?.title, media?.artist, media?.album].map(value => String(value || '')).join('\u0000');
+  function reconcileMediaTimeline(media) {
+    const pending = pendingTimelineChange;
+    if (!pending) return media;
+    const position = Number(media?.position) || 0;
+    const updatedAt = Number(media?.updatedAt) || 0;
+    const now = Date.now();
+    const sampleAge = updatedAt > 0 ? Math.max(0, now - updatedAt) / 1000 : 0;
+    const reportedPosition = position + (media?.playing ? sampleAge : 0);
+    const expectedPosition = pending.position + (media?.playing ? Math.max(0, now - pending.issuedAt) / 1000 : 0);
+    if (mediaIdentity(media) !== pending.identity || Math.abs(reportedPosition - expectedPosition) <= 1.5 ||
+        now >= pending.expiresAt) {
+      pendingTimelineChange = null;
+      return media;
+    }
+    return { ...media, position: pending.position, updatedAt: pending.issuedAt };
+  }
+  function clockPosition() {
+    if (!mediaClock) return 0;
+    const elapsed = mediaClock.playing ? (performance.now() - mediaClock.at) / 1000 : 0;
+    const value = mediaClock.position + elapsed;
+    return mediaClock.duration > 0 ? Math.min(value, mediaClock.duration) : value;
+  }
+  function renderProgress() {
+    if (!mediaClock) return;
+    const position = mediaScrubbing ? mediaSeekPreview : clockPosition();
+    const duration = mediaClock.duration;
+    const percent = duration > 0 ? `${Math.min(100, position / duration * 100).toFixed(3)}%` : '0%';
+    ['#ps', '#pkt'].forEach(id => { const node = $(id); if (node) node.textContent = formatTime(position); });
+    ['#pb', '#pkb'].forEach(id => { const node = $(id); if (node) node.style.width = percent; });
+    const seekValue = duration > 0 ? String(Math.round(Math.min(1, Math.max(0, position / duration)) * 1000)) : '0';
+    $$('.media-seek').forEach(node => {
+      if (document.activeElement !== node) node.value = seekValue;
+      node.setAttribute('aria-valuetext', `${formatTime(position)} of ${formatTime(duration)}`);
+      node.disabled = !currentMedia?.active || !currentMedia.canSeek || duration <= 0;
+    });
+  }
+  let progressFrame = 0;
+  function progressLoop() {
+    progressFrame = 0;
+    renderProgress();
+    if (currentMedia?.active && currentMedia.playing) progressFrame = requestAnimationFrame(progressLoop);
+  }
+  function updateProgressLoop() {
+    if (currentMedia?.active && currentMedia.playing) {
+      if (!progressFrame) progressFrame = requestAnimationFrame(progressLoop);
+    } else if (progressFrame) {
+      cancelAnimationFrame(progressFrame);
+      progressFrame = 0;
+    }
+  }
+
   function renderExternalMedia() {
     const media = currentMedia;
+    syncMediaClock(media);
     if (!media?.active) {
-      $$('.mt h4').forEach(node => node.textContent = ST[si].n);
-      $$('.mt p').forEach(node => node.textContent = ST[si].a);
-      $$('.art,.ca').forEach(node => { node.style.backgroundImage = ''; node.style.background = GR[si]; });
+      $('#isl').classList.remove('ext');
       $('#eq').classList.toggle('on', !!S.play);
       $('#isl').classList.toggle('playing', !!S.play);
       localRender();
+      renderLocalLabel();
+      updateProgressLoop();
       return;
     }
     const title = media.title || 'Playing audio';
-    const source = String(media.source || '').split(/[!\\/]/).pop().replace(/\.exe$/i, '') || 'Media player';
+    const source = friendlySource(media.source);
     const details = [media.artist, media.album, source].filter(Boolean).join(' · ');
     $$('.mt h4').forEach(node => node.textContent = title);
     $$('.mt p').forEach(node => node.textContent = details);
-    if (media.cover) {
-      $$('.art,.ca').forEach(node => {
-        node.style.background = '#18181b';
-        node.style.backgroundImage = `url("${media.cover}")`;
-        node.style.backgroundSize = 'cover';
-        node.style.backgroundPosition = 'center';
-      });
-    } else {
-      $$('.art,.ca').forEach(node => { node.style.backgroundImage = ''; node.style.background = GR[si]; });
-    }
-    const position = Number(media.position) || 0;
-    const duration = Number(media.duration) || 0;
-    const percent = duration > 0 ? `${Math.min(100, position / duration * 100)}%` : '0%';
-    ['#ps', '#pkt'].forEach(id => { if ($(id)) $(id).textContent = formatTime(position); });
-    ['#pb', '#pkb'].forEach(id => { if ($(id)) $(id).style.width = percent; });
-    $$('.media .bar > span:last-child').forEach(node => node.textContent = duration ? formatTime(duration) : 'Live');
+    applyCover(media.cover);
+    renderProgress();
+    updateProgressLoop();
+    ['#pd', '#pkd'].forEach(id => { const node = $(id); if (node) node.textContent = mediaClock.duration ? formatTime(mediaClock.duration) : 'Live'; });
     $('#pp').innerHTML = $('#pkpp').innerHTML = ic(media.playing ? 'pa' : 'pl');
-    $('#eq').classList.toggle('on', !!media.playing);
+    /* The compact indicator stays visible whenever a session is loaded so its
+       artwork persists while paused; the bars animate only during playback. */
+    $('#eq').classList.toggle('on', true);
+    $('#isl').classList.toggle('ext', true);
     const wasCompact = $('#isl').classList.contains('playing');
     $('#isl').classList.add('playing');
     if (!wasCompact) { try { fit(); } catch { /* Startup */ } }
   }
-  async function mediaAction(action) {
-    const ok = await safeCall(() => api.media.control(action), 'Media control failed');
-    if (!ok) toast('This player did not accept the media command');
+  async function mediaAction(action, positionMs) {
+    const previousMedia = currentMedia;
+    const previousClock = mediaClock;
+    let optimisticMedia = null;
+    const now = Date.now();
+    const targetPosition = action === 'seek' ? Math.max(0, Number(positionMs) / 1000) :
+      action === 'previous' || action === 'next' ? 0 : null;
+    if (currentMedia?.active && (action === 'toggle' || targetPosition !== null)) {
+      optimisticMedia = {
+        ...currentMedia,
+        position: targetPosition === null ? clockPosition() : targetPosition,
+        updatedAt: now,
+        playing: action === 'toggle' ? !currentMedia.playing : !!currentMedia.playing
+      };
+      currentMedia = optimisticMedia;
+      S.play = optimisticMedia.playing;
+      if (targetPosition !== null) {
+        pendingTimelineChange = {
+          identity: mediaIdentity(optimisticMedia),
+          position: targetPosition,
+          issuedAt: now,
+          expiresAt: now + 1800
+        };
+      }
+      renderExternalMedia();
+    }
+    const ok = await safeCall(() => api.media.control(action, positionMs), 'Media control failed');
+    if (!ok) {
+      if (optimisticMedia && currentMedia === optimisticMedia) {
+        currentMedia = previousMedia;
+        mediaClock = previousClock;
+        if (pendingTimelineChange?.issuedAt === now) pendingTimelineChange = null;
+        S.play = !!previousMedia?.playing;
+        renderExternalMedia();
+      }
+      toast('This player did not accept the media command');
+    }
   }
+  $$('.media-seek').forEach(node => {
+    node.addEventListener('pointerdown', () => {
+      if (!mediaClock || !currentMedia?.canSeek) return;
+      mediaSeekPreview = clockPosition();
+      mediaScrubbing = true;
+    });
+    node.addEventListener('pointerup', () => setTimeout(() => {
+      if (mediaScrubbing) { mediaScrubbing = false; renderProgress(); }
+    }, 0));
+    node.addEventListener('pointercancel', () => { mediaScrubbing = false; renderProgress(); });
+    node.addEventListener('keydown', event => {
+      if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) mediaScrubbing = true;
+    });
+    node.addEventListener('input', () => {
+      if (!mediaClock || !currentMedia?.canSeek) return;
+      mediaScrubbing = true;
+      mediaSeekPreview = mediaClock.duration * (Number(node.value) / 1000);
+      renderProgress();
+    });
+    node.addEventListener('change', () => {
+      if (!mediaClock || !currentMedia?.canSeek) { mediaScrubbing = false; return; }
+      const positionMs = Math.round(mediaSeekPreview * 1000);
+      mediaScrubbing = false;
+      mediaClock = { ...mediaClock, position: mediaSeekPreview, at: performance.now() };
+      mediaAction('seek', positionMs);
+      renderProgress();
+    });
+    node.addEventListener('blur', () => {
+      if (mediaScrubbing) { mediaScrubbing = false; renderProgress(); }
+    });
+  });
   const playerToggle = () => currentMedia?.active ? mediaAction('toggle') : localToggle();
   const playerSkip = direction => currentMedia?.active ? mediaAction(direction < 0 ? 'previous' : 'next') : localSkip(direction);
   $('#pp').onclick = $('#pkpp').onclick = playerToggle;
   $('#prev').onclick = $('#pkprev').onclick = () => playerSkip(-1);
   $('#next').onclick = $('#pknext').onclick = () => playerSkip(1);
-  pl = () => currentMedia?.active ? renderExternalMedia() : localRender();
+  pl = () => {
+    if (currentMedia?.active) return renderExternalMedia();
+    localRender();
+    renderLocalLabel();
+  };
   const island = $('#isl');
   const oldMouseEnter = island.onmouseenter;
   island.onmouseenter = () => {
     if (currentMedia?.active && !island.classList.contains('open')) { island.classList.add('peek'); fit(); }
     else oldMouseEnter?.();
   };
+  let mediaWasActive = false;
   api.media.onChanged(media => {
+    media = reconcileMediaTimeline(media);
+    const active = !!media?.active;
+    const wasActive = mediaWasActive;
+    mediaWasActive = active;
     currentMedia = media;
     window.__notchExternalMedia = media;
-    if (media?.active) {
+    if (active) {
       S.play = !!media.playing;
       if (ac) { clearInterval(tm); ac.suspend(); }
+    } else if (wasActive) {
+      /* External playback ended: return to a neutral idle state instead of
+         leaving the fallback player stuck showing a fake "playing" state. */
+      S.play = false;
     }
     renderExternalMedia();
   });
   api.media.get().then(media => {
+    media = reconcileMediaTimeline(media);
     currentMedia = media;
     window.__notchExternalMedia = media;
+    mediaWasActive = !!media?.active;
     if (media?.active) S.play = !!media.playing;
     renderExternalMedia();
   }).catch(() => {});
@@ -616,136 +801,10 @@
   api.clipboard.onChanged(refreshClipboard);
   refreshClipboard();
 
-  /* Installed app launcher uses Start menu identities and native shell launch. */
-  const appView = $('#v-apps');
-  appView.innerHTML = `<div class="as"><span>${ic('sr')}</span><input id="asq" placeholder="Search installed apps…" autocomplete="off" aria-label="Search installed apps"><kbd>Ctrl K</kbd><button class="app-add" id="app-add" type="button">Add app</button></div><div id="qk"></div><div id="apl"></div>`;
-  const quickLinks = [['Gmail', 'https://mail.google.com'], ['GitHub', 'https://github.com'], ['YouTube', 'https://www.youtube.com'], ['Maps', 'https://maps.google.com']];
-  $('#qk').innerHTML = quickLinks.map(([name], index) => `<button class="qk" data-i="${index}"><span>${ic('bolt')}</span><b>${name}</b></button>`).join('');
-  $('#qk').onclick = event => {
-    const button = event.target.closest('[data-i]');
-    if (button) safeCall(() => api.external(quickLinks[Number(button.dataset.i)][1]), 'Could not open link');
-  };
-  let installedApps = [], customApps = [];
-  try { customApps = JSON.parse(localStorage.getItem('notch.customApps') || '[]'); } catch { customApps = []; }
-  let starred = new Set();
-  let recent = [];
-  try { starred = new Set(JSON.parse(localStorage.getItem('notch.starredApps') || '[]')); } catch { }
-  try { recent = JSON.parse(localStorage.getItem('notch.recentApps') || '[]'); } catch { }
-  const appKey = app => app.path || app.id || app.name;
-  const allApps = () => [
-    ...installedApps.map(item => ({ ...item, name: item.name, kind: 'Application' })),
-    ...customApps.map(item => ({ ...item, kind: 'Custom application' }))
-  ];
-  let appRows = [];
-  function renderApps() {
-    const query = $('#asq').value.trim().toLowerCase();
-    const all = allApps();
-    let groups;
-    if (query) {
-      groups = [['Results', all.filter(app => app.name.toLowerCase().includes(query))]];
-    } else {
-      const byKey = key => all.find(app => appKey(app) === key);
-      groups = [
-        ['Pinned', [...starred].map(byKey).filter(Boolean)],
-        ['Recent', recent.map(byKey).filter(app => app && !starred.has(appKey(app)))],
-        ['Installed applications', all.filter(app => !starred.has(appKey(app)) && !recent.includes(appKey(app)))]
-      ];
-    }
-    groups = groups.filter(([, rows]) => rows.length);
-    appRows = groups.flatMap(([, rows]) => rows);
-    const host = $('#apl');
-    host.replaceChildren();
-    groups.forEach(([title, rows]) => {
-      const heading = document.createElement('div');
-      heading.className = 'ah';
-      heading.textContent = title;
-      host.append(heading);
-      rows.forEach(app => {
-        const index = appRows.indexOf(app);
-        const row = document.createElement('div');
-        row.className = 'ar3';
-        row.dataset.nativeIndex = String(index);
-        const icon = app.icon ? document.createElement('img') : document.createElement('span');
-        if (app.icon) { icon.src = app.icon; icon.className = 'app-icon'; icon.alt = ''; }
-        else { icon.className = 'app-fallback'; icon.textContent = app.name.slice(0, 1).toUpperCase(); }
-        const name = document.createElement('span'); name.className = 'an'; name.textContent = app.name;
-        const type = document.createElement('em'); type.className = 'at'; type.textContent = app.kind;
-        const star = document.createElement('button');
-        star.type = 'button'; star.className = `sb ${starred.has(appKey(app)) ? 'on' : ''}`;
-        star.title = starred.has(appKey(app)) ? 'Unpin application' : 'Pin application';
-        star.setAttribute('aria-label', star.title); star.textContent = '☆';
-        row.append(icon, name, type, star);
-        host.append(row);
-      });
-    });
-    if (!appRows.length) {
-      const empty = document.createElement('p'); empty.className = 'native-empty';
-      empty.textContent = query ? 'No installed apps match that search.' : 'No Start menu applications were found.';
-      host.append(empty);
-    }
-  }
-  async function refreshApps() {
-    const rows = await safeCall(() => api.apps.list(), 'Could not load installed apps');
-    if (rows) installedApps = rows;
-    renderApps();
-  }
-  async function openApp(app) {
-    if (!app) return;
-    const result = app.path
-      ? await safeCall(() => api.apps.openPath(app.path), `Could not open ${app.name}`)
-      : await safeCall(() => api.apps.launch(app.id), `Could not launch ${app.name}`);
-    if (result === null) return;
-    const key = appKey(app);
-    recent = [key, ...recent.filter(item => item !== key)].slice(0, 8);
-    localStorage.setItem('notch.recentApps', JSON.stringify(recent));
-    toast(`Opened ${app.name}`);
-  }
-  $('#app-add').onclick = async () => {
-    const result = await safeCall(() => api.apps.pick(), 'Could not add application');
-    if (!result) return;
-    if (!customApps.some(app => app.path === result.path)) customApps.push(result);
-    localStorage.setItem('notch.customApps', JSON.stringify(customApps));
-    renderApps();
-  };
-  $('#asq').oninput = renderApps;
-  $('#apl').onclick = event => {
-    const row = event.target.closest('.ar3');
-    if (!row) return;
-    const app = appRows[Number(row.dataset.nativeIndex)];
-    if (event.target.closest('.sb')) {
-      const key = appKey(app);
-      starred.has(key) ? starred.delete(key) : starred.add(key);
-      localStorage.setItem('notch.starredApps', JSON.stringify([...starred]));
-      renderApps();
-      return;
-    }
-    openApp(app);
-  };
-  $('#asq').onkeydown = event => {
-    if (event.key === 'Enter') { event.preventDefault(); openApp(appRows[0]); }
-    if (event.key === 'Escape') { $('#asq').value = ''; renderApps(); }
-  };
-  window.addEventListener('keydown', event => {
-    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
-    event.preventDefault();
-    expand();
-    selectTab('Apps');
-    setTimeout(() => $('#asq').focus(), 150);
-  });
+  const appsPage = window.NotchPages.apps({ api, $, ic, safeCall, toast, expand, selectTab });
+  refreshApps = appsPage.refreshApps;
   refreshApps();
-
-  /* Power actions call the main process; restart and shutdown are confirmed there. */
-  $('#pg').onclick = async event => {
-    const button = event.target.closest('.pw');
-    if (!button) return;
-    const actions = { Lock: 'lock', Sleep: 'sleep', Restart: 'restart', 'Shut down': 'shutdown' };
-    const action = actions[button.dataset.n];
-    if (!action) return;
-    button.disabled = true;
-    const result = await safeCall(() => api.power(action), `Could not ${button.dataset.n.toLowerCase()}`);
-    button.disabled = false;
-    if (result) toast(`${button.dataset.n} requested`);
-  };
+  window.NotchPages.power({ api, $, ic, safeCall, toast });
 
   /* Desktop wallpaper selection and applying use the native file picker/API. */
   const builtInWallpapers = window.notchWallpaperUI.builtIns;
@@ -848,5 +907,11 @@
   renderReminders();
   setInterval(checkReminders, 30000);
 
+  /* A disconnected monitor should not leave the notch stuck off-screen. The main
+     process falls back to the primary display and this keeps the settings honest. */
+  api.onDisplayChanged?.(() => {
+    toast('The selected display was disconnected — using the primary display');
+    loadSettings();
+  });
   loadSettings();
 })();

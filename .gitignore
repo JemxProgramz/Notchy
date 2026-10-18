@@ -2,6 +2,7 @@ node_modules/
 /release*/
 /dist/
 /dist-*/
+/Build-test*/
 /graphify-out/
 /src/native/build/
 /coverage/

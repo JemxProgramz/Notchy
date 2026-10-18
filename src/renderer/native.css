@@ -49,6 +49,11 @@
 @keyframes wireless-spin{to{transform:rotate(360deg)}}
 .wireless-actions button:focus-visible,.wireless-row button:focus-visible,.wireless-form button:focus-visible,.wireless-form input:focus-visible,.wireless-password button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 .app-add{flex:none;padding:7px 10px}
+/* Recovery affordance shown next to "Windows control unavailable" reasons. */
+.native-retry{border:0;border-radius:9px;background:rgba(255,255,255,.09);color:var(--tx);padding:5px 10px;font:inherit;font-size:11px;font-weight:600;cursor:pointer;transition:background .16s,transform .16s}
+.native-retry:hover{background:color-mix(in srgb,var(--gold) 22%,var(--tile))}
+.native-retry:active{transform:scale(.97)}
+.native-retry:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 .ar3 .app-icon{width:32px;height:32px;object-fit:contain;border-radius:8px}
 .ar3 .app-fallback{width:32px;height:32px;border-radius:9px;background:rgba(255,255,255,.1);display:grid;place-items:center;font-size:13px;font-weight:700}
 .ar3 .sb{background:none;border:0;color:var(--mut);padding:4px;cursor:pointer}

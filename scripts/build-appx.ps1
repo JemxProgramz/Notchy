@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
-$release = Join-Path $project 'dist\appx'
+$release = Join-Path $project 'Build-test\appx'
 $pfx = Join-Path $release 'Notch-Appx-signing.tmp.pfx'
 $cer = Join-Path $release 'Notch-Appx-Certificate.cer'
 $rsa = $null

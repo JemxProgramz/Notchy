@@ -40,7 +40,7 @@ Notch places a transparent, frameless island at the top of a selected display, b
 
 ### Desktop tools
 
-- CPU, memory, disk, network activity, uptime, and top-process metrics.
+- CPU, GPU, memory, disk, network activity, and top-process metrics.
 - Text clipboard history with configurable size and retention limits.
 - Start menu application discovery, pinned applications, and an application picker.
 - Wallpaper previews, local image imports, and applying an image as the Windows desktop wallpaper.
@@ -89,7 +89,7 @@ npm run build:dir     # Unpacked application directory
 npm run build:appx    # Optional, locally signed AppX package
 ```
 
-Build output is written to `dist/` and is excluded from version control.
+Build output is written to `Build-test/` and is excluded from version control. The optional AppX package and its installer helpers are written to `Build-test/appx/`.
 
 To compile the addon on its own, run `npm run build:native`. It uses stable Node-API and Windows WLAN/Windows Runtime APIs; no PowerShell or `netsh` process is used for Wi-Fi or Bluetooth operations. The compiled `.node` file is shipped as a native resource alongside Electron's ASAR archive.
 
@@ -114,27 +114,53 @@ Notch is an Electron application. The main process owns Windows integrations and
 
 ```text
 src/
-├── main.js                         Main process and Windows integrations
-├── preload.js                      Restricted renderer IPC bridge
-├── media.ps1                       Windows media-session helper
-├── native/
-│   ├── binding.gyp                 Native addon build configuration
-│   ├── wireless_addon.cc           Node-API exports and input validation
-│   ├── wireless_operations.cc      Async operation dispatch and error delivery
-│   ├── wireless_wifi.cc            Windows WLAN discovery and connections
-│   ├── wireless_radio.cc           Windows radio state and controls
-│   ├── wireless_bluetooth.cc       Device discovery, pairing, and status
-│   ├── wireless_state.cc           Renderer-facing state serialization
-│   ├── wireless_common.cc          Shared Windows string and error helpers
-│   └── wireless_*.h                Native API and work-item declarations
-└── renderer/
-    ├── index.html                  Interface and original renderer
-    ├── native-integration.js       Electron/Windows renderer integration
-    └── native.css                  Native integration styles
++-- main.js                         Main-process startup and shared Windows services
++-- preload.js                      Restricted renderer IPC bridge
++-- media.ps1                       Windows media-session helper
++-- pages/
+|   +-- index.js                    Page IPC registration
+|   +-- controls/
+|   |   +-- renderer/index.js       Controls UI: Wi-Fi, Bluetooth, brightness, volume, night light, theme
+|   |   +-- main.js                 Controls IPC registration
+|   |   +-- wifi/main.js + native/wifi.cc
+|   |   +-- bluetooth/main.js + native/bluetooth.cc
+|   |   +-- brightness/main.js
+|   |   +-- volume/main.js
+|   |   +-- wireless/main.js + native helpers
+|   |   +-- audio/native/            Windows output-level capture
+|   |   `-- windows-settings/main.js
+|   +-- today/
+|   |   +-- renderer/index.js       Clock, weather, timer, task list, calendar
+|   |   +-- main.js
+|   |   +-- task/main.js            Native reminder notifications
+|   +-- stats/
+|   |   +-- renderer/index.js       CPU, GPU, memory, network, processes, storage
+|   |   +-- main.js
+|   +-- clipboard/                  renderer/index.js and main.js
+|   +-- apps/                       renderer/index.js and main.js
+|   +-- wallpaper/                  renderer/index.js and main.js
+|   +-- power/                      renderer/index.js and main.js
+|   +-- settings/                   renderer/index.js and main.js
++-- renderer/
+|   +-- index.html                  Interface markup and script order
+|   +-- app.js                      Shared UI state and core interactions
+|   +-- integrations/windows.js     Cross-page Windows integration
+|   +-- bootstrap.js                UI initialization
+|   +-- styles.css                  Shared UI styles
+|   +-- native.css                  Windows integration styles
++-- native/
+|   +-- binding.gyp                 Native addon build configuration
+|   `-- build/                      Generated, ignored node-gyp output
 assets/                              Application icons
 build/appx/                          AppX package logos
 scripts/                             Validation, build, and install helpers
 ```
+
+Page code lives together under `src/pages/<page>/`: each page keeps its renderer module and Electron main-process handlers side by side. Controls groups Wi-Fi, Bluetooth, brightness, volume, night light, and notch theme; Wi-Fi and Bluetooth native C++ sources sit in their feature folders. Today groups clock, weather, timer, tasks, and calendar; Stats groups CPU, GPU, memory, network, top processes, and storage; Wallpaper groups Recent and My folder.
+
+The `src/renderer/` directory contains the shared UI shell and cross-page Windows integration. `src/native/binding.gyp` builds the feature-local C++ sources into `src/native/build/`; that generated directory stays ignored. `src/main.js` owns application lifecycle and shared Windows services, while `src/preload.js` exposes the restricted IPC bridge.
+
+Renderer scripts load in dependency order from `renderer/index.html`. The shared shell initializes page UI, while `renderer/integrations/windows.js` connects page features to Electron and Windows APIs.
 
 ## Privacy and local data
 
@@ -142,6 +168,7 @@ scripts/                             Validation, build, and install helpers
 - Settings and clipboard history are stored in Electron's per-user `userData` directory.
 - Tasks, reminders, pinned applications, and wallpaper-selection metadata use Notch's local Chromium storage.
 - Clipboard monitoring can be disabled in Settings. When enabled, text clipboard history is collected locally while Notch is running; history can be cleared in Settings.
+- The external media visualizer reads live output levels from the Windows audio loopback while a media session is playing. Notch keeps only a short in-memory sample window and does not record or save audio.
 - Obvious password, token, and private-key text is skipped. This is a best-effort filter, not a guarantee that every sensitive string will be detected.
 - Clipboard image history is not implemented. Notifications are delivered only while Notch is running.
 
@@ -152,6 +179,7 @@ scripts/                             Validation, build, and install helpers
 - Wi-Fi discovery, radio control, saved-profile connection, and supported personal-network setup use the Windows WLAN and Radio APIs through the native addon. Enterprise authentication modes are not configured by Notch.
 - Windows owns per-device Bluetooth connection behavior. Notch can toggle the radio, discover and pair devices in the notch, and report a paired device's connection status; individual audio/input connection profiles remain managed by Windows.
 - Media controls depend on a compatible Windows media session being active.
+- External media visualization depends on Windows providing an active default multimedia output device; without it, playback controls still work and the visualizer stays idle.
 - Display, power, and system-control behavior may be restricted by Windows policy or a remote session.
 
 ## Troubleshooting
@@ -166,7 +194,7 @@ scripts/                             Validation, build, and install helpers
 | Wi-Fi networks do not appear | Turn on the Wi-Fi radio and refresh the in-app network list. Scanning depends on Windows WLAN services and driver support. |
 | Bluetooth pairing or connection status is unavailable | Confirm Bluetooth is on and the device is discoverable. Windows may require confirmation and manages per-device connection profiles. |
 | The native addon build reports that Visual Studio is missing | Install Visual Studio Build Tools with the **Desktop development with C++** workload and a Windows 10/11 SDK, then run `npm run build:native`. |
-| A build cannot replace `Notch.exe` | Close running Notch instances from the project's `dist/` folder, then retry. |
+| A build cannot replace `Notch.exe` | Close running Notch instances from the project's `Build-test/` folder, then retry. |
 
 ## Contributing
 

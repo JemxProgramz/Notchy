@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
+const registerPageIpc = require('./pages');
 
 const run = promisify(execFile);
 const runPowerShell = (script, options = {}) => run('powershell.exe', [
@@ -12,6 +13,7 @@ const runPowerShell = (script, options = {}) => run('powershell.exe', [
   Buffer.from(script, 'utf16le').toString('base64')
 ], { windowsHide: true, timeout: 7000, ...options });
 let nativeWireless;
+let nativeAudio;
 if (process.platform === 'win32') {
   try {
     const addonPath = app.isPackaged
@@ -20,6 +22,14 @@ if (process.platform === 'win32') {
     nativeWireless = require(addonPath);
   } catch (error) {
     console.error('The Windows native wireless addon could not be loaded. Run npm run build:native before starting Notch:', error);
+  }
+  try {
+    const addonPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'audio.node')
+      : path.join(__dirname, 'native', 'build', 'Release', 'audio.node');
+    nativeAudio = require(addonPath);
+  } catch (error) {
+    console.error('The Windows audio visualizer addon could not be loaded. Run npm run build:native before starting Notch:', error);
   }
 }
 const wirelessAddon = () => {
@@ -45,8 +55,11 @@ let shuttingDown = false;
 let dataLoaded = false;
 let cpuLoadPrimed = false;
 let slowStats = { at: 0, graphics: null, drives: [], interfaces: [], processes: [], netStats: [], refreshing: false };
+let slowStatsRefresh;
 let mediaProcess;
 let mediaState = { supported: null, active: false };
+let mediaLoopbackActive = false;
+let mediaLevelsTimer;
 let windowScene = { mode: 'idle', height: 22, wide: false };
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -83,6 +96,42 @@ function broadcast(channel, value) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, value);
 }
 
+function startMediaLevelBroadcast() {
+  if (mediaLevelsTimer) return;
+  mediaLevelsTimer = setInterval(() => {
+    if (!mediaLoopbackActive) return;
+    try { broadcast('notch:media:levels', nativeAudio.getLevels()); }
+    catch (error) {
+      console.warn('Could not read audio visualizer samples:', error.message);
+      syncMediaLoopback(null);
+    }
+  }, 33);
+}
+
+function stopMediaLevelBroadcast() {
+  clearInterval(mediaLevelsTimer);
+  mediaLevelsTimer = null;
+}
+
+function syncMediaLoopback(media) {
+  const shouldCapture = !!nativeAudio && !!media?.active && !!media?.playing;
+  if (shouldCapture === mediaLoopbackActive) return;
+  try {
+    if (shouldCapture) {
+      mediaLoopbackActive = nativeAudio.start() === true;
+      if (mediaLoopbackActive) startMediaLevelBroadcast();
+    } else {
+      stopMediaLevelBroadcast();
+      nativeAudio?.stop();
+      mediaLoopbackActive = false;
+    }
+  } catch (error) {
+    stopMediaLevelBroadcast();
+    mediaLoopbackActive = false;
+    console.warn('Could not update the audio visualizer capture:', error.message);
+  }
+}
+
 function handleIpc(channel, listener) {
   return ipcMain.handle(channel, (event, ...args) => {
     const contents = win && !win.isDestroyed() ? win.webContents : null;
@@ -106,6 +155,7 @@ function startMediaMonitor() {
       const next = JSON.parse(line);
       if (next.active && !Object.hasOwn(next, 'cover') && mediaState.cover) next.cover = mediaState.cover;
       mediaState = next;
+      syncMediaLoopback(next);
       broadcast('notch:media:changed', mediaState);
     } catch { /* ignore incomplete or non-JSON output */ }
   };
@@ -118,10 +168,12 @@ function startMediaMonitor() {
   });
   mediaProcess.on('error', error => {
     mediaState = { supported: false, active: false, error: error.message };
+    syncMediaLoopback(null);
     broadcast('notch:media:changed', mediaState);
   });
   mediaProcess.on('exit', () => {
     mediaProcess = null;
+    syncMediaLoopback(null);
     if (!shuttingDown) {
       mediaState = { supported: false, active: false };
       broadcast('notch:media:changed', mediaState);
@@ -172,6 +224,18 @@ function repositionWindow() {
   if (win && !win.isDestroyed()) {
     win.setBounds(bounds(windowScene.mode, windowScene.height, windowScene.wide), false);
   }
+}
+
+// If the display the notch lives on is disconnected, fall back to the primary
+// display, persist the change, and tell the renderer so its settings stay true.
+function handleDisplayRemoved() {
+  if (config.displayId != null && !screen.getAllDisplays().some(display => display.id === config.displayId)) {
+    config.displayId = null;
+    saveData();
+    broadcast('notch:display:changed', { displayId: null });
+    updateTray();
+  }
+  repositionWindow();
 }
 
 function openWindow(action = 'toggle') {
@@ -282,6 +346,40 @@ async function openExternal(value) {
   await shell.openExternal(url.href);
 }
 
+async function readStorageVolumes() {
+  const script = String.raw`
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$volumes = @(
+  foreach ($drive in [System.IO.DriveInfo]::GetDrives()) {
+    try {
+      if ($drive.DriveType -eq [System.IO.DriveType]::Fixed -and $drive.IsReady) {
+        [pscustomobject]@{
+          mount = $drive.Name.TrimEnd([char]92).ToUpperInvariant()
+          label = $drive.VolumeLabel
+          size = [long]$drive.TotalSize
+          used = [long]($drive.TotalSize - $drive.TotalFreeSpace)
+          available = [long]$drive.AvailableFreeSpace
+        }
+      }
+    } catch { }
+  }
+)
+ConvertTo-Json -InputObject $volumes -Compress
+`;
+  const { stdout } = await runPowerShell(script);
+  const volumes = JSON.parse(stdout.trim() || '[]');
+  return (Array.isArray(volumes) ? volumes : [volumes])
+    .filter(volume => volume?.mount && Number(volume.size) > 0)
+    .map(volume => ({
+      mount: String(volume.mount).toUpperCase(),
+      label: String(volume.label || '').trim(),
+      size: Number(volume.size) || 0,
+      used: Math.max(0, Number(volume.used) || 0),
+      available: Math.max(0, Number(volume.available) || 0)
+    }))
+    .sort((a, b) => a.mount.localeCompare(b.mount));
+}
+
 async function systemStats(order = 'cpu') {
   const load = await si.currentLoad();
   if (!cpuLoadPrimed) {
@@ -295,21 +393,27 @@ async function systemStats(order = 'cpu') {
   // the background so a routine poll only pays for CPU and memory, and never
   // stalls behind a process/WMI sweep.
   const slowTtl = Math.max(5000, Number(config.monitorRefreshMs) || 3000);
-  const refreshSlowStats = () => Promise.all([
-    si.graphics().catch(() => ({ controllers: [] })), si.fsSize().catch(() => []),
-    si.networkInterfaces().catch(() => []), si.processes().catch(() => ({ list: [] })), si.networkStats().catch(() => [])
-  ]).then(([graphics, drives, interfaces, processes, netStats]) => {
-    slowStats = { at: Date.now(), graphics, drives, interfaces, processes, netStats, refreshing: false };
-  }).catch(() => { slowStats.refreshing = false; });
+  const refreshSlowStats = () => {
+    if (slowStatsRefresh) return slowStatsRefresh;
+    slowStats.refreshing = true;
+    slowStatsRefresh = Promise.all([
+      si.graphics().catch(() => ({ controllers: [] })), readStorageVolumes().catch(() => []),
+      si.networkInterfaces().catch(() => []), si.processes().catch(() => ({ list: [] })), si.networkStats().catch(() => [])
+    ]).then(([graphics, drives, interfaces, processes, netStats]) => {
+      slowStats = { at: Date.now(), graphics, drives, interfaces, processes, netStats, refreshing: true };
+    }).finally(() => {
+      slowStats.refreshing = false;
+      slowStatsRefresh = null;
+    });
+    return slowStatsRefresh;
+  };
   if (!slowStats.at) {
     await refreshSlowStats();
   } else if (!slowStats.refreshing && Date.now() - slowStats.at >= slowTtl) {
-    slowStats.refreshing = true;
     void refreshSlowStats();
   }
   const { graphics, drives, interfaces, processes, netStats } = slowStats;
   const gpu = graphics.controllers?.[0] || {};
-  const disk = drives.find(x => String(x.mount).toUpperCase() === 'C:') || drives.find(x => x.mount === '/') || drives[0];
   const netRows = (netStats || []).filter(x => x.iface && !/loopback|lo$/i.test(x.iface));
   const ratesReady = netRows.length > 0 && netRows.every(x => Number.isFinite(x.rx_sec) && Number.isFinite(x.tx_sec) && x.rx_sec >= 0 && x.tx_sec >= 0);
   const rx = ratesReady ? netRows.reduce((n, x) => n + x.rx_sec, 0) / 1048576 : null;
@@ -328,9 +432,9 @@ async function systemStats(order = 'cpu') {
     memoryTotal: Number(memory.total) || 0,
     gpuName: gpu.model || gpu.name || null,
     gpu: Number.isFinite(gpuLoad) && gpuLoad >= 0 && gpuLoad <= 100 ? gpuLoad : null,
-    disk: disk ? { used: Number(disk.used) || 0, size: Number(disk.size) || 0, available: Math.max(0, (Number(disk.size) || 0) - (Number(disk.used) || 0)), mount: disk.mount } : null,
+    disks: drives,
     network: { online: !!active, name: active?.iface || null, rx, tx },
-    uptimeSeconds: os.uptime(), topProcesses,
+    topProcesses,
     gpuAvailable: Number.isFinite(gpuLoad) && gpuLoad >= 0 && gpuLoad <= 100
   };
 }
@@ -599,147 +703,70 @@ async function powerAction(action) {
   return true;
 }
 
-handleIpc('notch:settings:get', () => ({ ...config }));
-handleIpc('notch:settings:save', async (_event, patch) => {
-  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('Invalid settings');
-  const next = { ...config };
-  for (const key of ['startup', 'alwaysOnTop', 'clickThrough', 'animations', 'clipboardEnabled', 'notifications']) if (key in patch) next[key] = !!patch[key];
-  if ('clipboardLimit' in patch) next.clipboardLimit = Math.max(10, Math.min(500, Number(patch.clipboardLimit) || 100));
-  if ('clipboardRetentionDays' in patch) next.clipboardRetentionDays = Math.max(1, Math.min(365, Number(patch.clipboardRetentionDays) || 30));
-  if ('monitorRefreshMs' in patch) next.monitorRefreshMs = Math.max(1000, Math.min(10000, Number(patch.monitorRefreshMs) || 3000));
-  if ('timeFormat' in patch && ['12h', '24h'].includes(patch.timeFormat)) next.timeFormat = patch.timeFormat;
-  if ('theme' in patch && ['dark', 'light', 'system'].includes(patch.theme)) next.theme = patch.theme;
-  if ('displayId' in patch && (patch.displayId === null || screen.getAllDisplays().some(d => d.id === patch.displayId))) next.displayId = patch.displayId;
-  if ('globalShortcut' in patch && typeof patch.globalShortcut === 'string') {
-    if (!registerShortcut(patch.globalShortcut)) throw new Error('That shortcut is unavailable. Choose a different key combination.');
-    next.globalShortcut = patch.globalShortcut;
-  }
-  config = next;
-  if ('startup' in patch) setStartup(config.startup);
-  win?.setAlwaysOnTop(config.alwaysOnTop);
-  setClickThrough(config.clickThrough);
-  if ('displayId' in patch) repositionWindow();
-  pruneClipboard();
-  saveData();
-  updateTray();
-  return { ...config };
+registerPageIpc({
+  handleIpc,
+  broadcast,
+  screen,
+  getControls,
+  setAudioVolume,
+  audioVolume,
+  setDisplayBrightness,
+  getWirelessState,
+  setWirelessRadio,
+  scanWifiNetworks,
+  connectWifi,
+  disconnectWifi,
+  scanBluetoothDevices,
+  pairBluetoothDevice,
+  shell,
+  systemStats,
+  installedApps,
+  startApps,
+  findStartMenuLink,
+  fs,
+  path,
+  spawn,
+  dialog,
+  getWindow: () => win,
+  pickWallpaper,
+  applyWallpaper,
+  app,
+  powerAction,
+  defaults,
+  getConfig: () => config,
+  setConfig: value => { config = value; },
+  registerShortcut,
+  setStartup,
+  setClickThrough,
+  repositionWindow,
+  pruneClipboard,
+  saveData,
+  updateTray,
+  getHistory: () => clipboardHistory,
+  setHistory: value => { clipboardHistory = value; },
+  getSuppressedText: () => suppressedText,
+  setSuppressedText: value => { suppressedText = value; },
+  cleanText,
+  clipboard,
+  Notification
 });
-handleIpc('notch:system:stats', systemStats);
+
 handleIpc('notch:media:get', () => mediaState);
-handleIpc('notch:media:control', (_event, action) => {
-  if (!['toggle', 'previous', 'next'].includes(action) || !mediaProcess || !mediaState.supported) return false;
+handleIpc('notch:media:control', (_event, action, positionMs) => {
+  if (!mediaProcess || !mediaState.supported || !mediaState.active) return false;
+  if (action === 'seek') {
+    const position = Number(positionMs);
+    const duration = Number(mediaState.duration);
+    if (!mediaState.canSeek || !Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return false;
+    const safePosition = Math.round(Math.max(0, Math.min(duration * 1000, position)));
+    try { mediaProcess.stdin.write(`seek:${safePosition}\n`); return true; } catch { return false; }
+  }
+  if (!['toggle', 'previous', 'next'].includes(action)) return false;
   try { mediaProcess.stdin.write(`${action}\n`); return true; } catch { return false; }
 });
-handleIpc('notch:controls:get', getControls);
-handleIpc('notch:controls:volume', async (_event, value) => setAudioVolume(value));
-handleIpc('notch:controls:mute', async (_event, muted) => audioVolume('mute', !!muted));
-handleIpc('notch:controls:brightness', async (_event, value) => setDisplayBrightness(value));
-handleIpc('notch:wireless:get', getWirelessState);
-handleIpc('notch:wireless:radio', async (_event, kind, enabled) => setWirelessRadio(kind, enabled));
-handleIpc('notch:wireless:wifi:scan', scanWifiNetworks);
-handleIpc('notch:wireless:wifi:connect', async (_event, details) => connectWifi(details));
-handleIpc('notch:wireless:wifi:disconnect', disconnectWifi);
-handleIpc('notch:wireless:bluetooth:scan', scanBluetoothDevices);
-handleIpc('notch:wireless:bluetooth:pair', async (_event, deviceId) => pairBluetoothDevice(deviceId));
-handleIpc('notch:windows:settings', async (_event, area) => {
-  const uris = { wifi: 'ms-settings:network-wifi', bluetooth: 'ms-settings:bluetooth', audio: 'ms-settings:sound', nightlight: 'ms-settings:nightlight', display: 'ms-settings:display', power: 'ms-settings:powersleep', startup: 'ms-settings:startupapps' };
-  if (!uris[area]) throw new Error('Unsupported Windows settings page');
-  await shell.openExternal(uris[area]);
-});
-handleIpc('notch:apps:list', installedApps);
-handleIpc('notch:apps:launch', async (_event, id) => {
-  const apps = await startApps();
-  const selected = apps.find(a => a.id === id);
-  if (typeof id !== 'string' || !selected) throw new Error('That application is no longer in the Start menu. Refresh and try again.');
-  const link = findStartMenuLink(selected.name);
-  if (link && fs.existsSync(link.file)) {
-    const error = await shell.openPath(link.file);
-    if (!error) return true;
-  }
-  if (/^[a-z][a-z\d+.-]*:\/\//i.test(id)) { await shell.openExternal(id); return true; }
-  if (path.win32.isAbsolute(id) && fs.existsSync(id)) {
-    const error = await shell.openPath(id);
-    if (!error) return true;
-  }
-  return new Promise((resolve, reject) => {
-    const appFolderItem = `shell:AppsFolder\\${id}`;
-    const child = spawn('explorer.exe', [appFolderItem], {
-      detached: true, stdio: 'ignore', windowsHide: false
-    });
-    child.once('error', reject);
-    child.once('spawn', () => { child.unref(); resolve(true); });
-  });
-});
-handleIpc('notch:apps:pick', async () => {
-  const choice = await dialog.showOpenDialog(win, { title: 'Add an application', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['exe', 'lnk', 'bat', 'cmd'] }] });
-  if (choice.canceled || !choice.filePaths[0]) return null;
-  return { name: path.basename(choice.filePaths[0], path.extname(choice.filePaths[0])), path: choice.filePaths[0] };
-});
-handleIpc('notch:apps:openPath', async (_event, file) => {
-  if (typeof file !== 'string' || !path.isAbsolute(file) || !fs.existsSync(file)) throw new Error('Application path is unavailable');
-  const error = await shell.openPath(file);
-  if (error) throw new Error(error);
-});
-handleIpc('notch:wallpaper:pick', pickWallpaper);
-handleIpc('notch:wallpaper:apply', (_event, file) => applyWallpaper(file));
-handleIpc('notch:wallpaper:applyDataUrl', async (_event, value) => {
-  if (typeof value !== 'string' || value.length > 16 * 1024 * 1024 || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value)) throw new Error('Invalid wallpaper image');
-  const file = path.join(app.getPath('userData'), 'wallpaper.png');
-  fs.writeFileSync(file, Buffer.from(value.slice(value.indexOf(',') + 1), 'base64'));
-  await applyWallpaper(file);
-});
-handleIpc('notch:wallpaper:preview', async (_event, file) => {
-  if (typeof file !== 'string' || !path.isAbsolute(file) || !fs.existsSync(file)) return null;
-  const stat = fs.statSync(file);
-  if (stat.size > 25 * 1024 * 1024) return null;
-  const ext = path.extname(file).toLowerCase();
-  const mime = ext === '.png' ? 'image/png' : ext === '.bmp' ? 'image/bmp' : 'image/jpeg';
-  return `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`;
-});
-handleIpc('notch:power', (_event, action) => powerAction(action));
 handleIpc('notch:external', (_event, url) => openExternal(url));
 handleIpc('notch:window:scene', (_event, scene) => setWindowScene(scene));
 handleIpc('notch:window:show', () => openWindow('controls'));
-handleIpc('notch:clipboard:list', () => clipboardHistory);
-handleIpc('notch:clipboard:copy', async (_event, id) => {
-  const item = clipboardHistory.find(x => x.id === id);
-  if (!item) throw new Error('Clipboard item not found');
-  suppressedText = item.text;
-  await clipboard.writeText(item.text);
-  setTimeout(() => { if (suppressedText === item.text) suppressedText = ''; }, 2500);
-});
-handleIpc('notch:clipboard:write', async (_event, value) => {
-  const text = cleanText(value);
-  if (!text) throw new Error('Clipboard text is empty or too long');
-  suppressedText = text;
-  await clipboard.writeText(text);
-  setTimeout(() => { if (suppressedText === text) suppressedText = ''; }, 2500);
-});
-handleIpc('notch:clipboard:pin', (_event, id) => {
-  const item = clipboardHistory.find(x => x.id === id);
-  if (!item) return clipboardHistory;
-  item.pinned = !item.pinned;
-  saveData();
-  broadcast('notch:clipboard:changed', clipboardHistory);
-  return clipboardHistory;
-});
-handleIpc('notch:clipboard:delete', (_event, ids) => {
-  const wanted = new Set((Array.isArray(ids) ? ids : [ids]).filter(x => typeof x === 'string'));
-  clipboardHistory = clipboardHistory.filter(x => !wanted.has(x.id));
-  saveData();
-  broadcast('notch:clipboard:changed', clipboardHistory);
-  return clipboardHistory;
-});
-handleIpc('notch:clipboard:clear', async () => {
-  const answer = await dialog.showMessageBox(win, { type: 'warning', title: 'Clear clipboard history', message: 'Delete all saved clipboard items?', buttons: ['Cancel', 'Clear history'], defaultId: 0, cancelId: 0, noLink: true });
-  if (answer.response === 1) { clipboardHistory = []; saveData(); broadcast('notch:clipboard:changed', clipboardHistory); }
-  return clipboardHistory;
-});
-handleIpc('notch:notify', (_event, title, body) => {
-  if (config.notifications && Notification.isSupported() && typeof title === 'string' && typeof body === 'string') new Notification({ title: title.slice(0, 80), body: body.slice(0, 200) }).show();
-});
-handleIpc('notch:version', () => app.getVersion());
-handleIpc('notch:display:list', () => screen.getAllDisplays().map(d => ({ id: d.id, label: d.label || `Display ${d.id}`, bounds: d.bounds })));
 
 let clipboardBusy = false;
 async function monitorClipboard() {
@@ -767,7 +794,7 @@ if (hasSingleInstanceLock) {
   app.whenReady().then(() => {
     app.setAppUserModelId('com.notch.desktop');
     screen.on('display-added', repositionWindow);
-    screen.on('display-removed', repositionWindow);
+    screen.on('display-removed', handleDisplayRemoved);
     screen.on('display-metrics-changed', repositionWindow);
     loadData();
     dataLoaded = true;
@@ -794,6 +821,8 @@ app.on('before-quit', () => {
   if (!hasSingleInstanceLock) return;
   shuttingDown = true;
   clearInterval(clipboardTimer);
+  stopMediaLevelBroadcast();
+  syncMediaLoopback(null);
   globalShortcut.unregisterAll();
   mediaProcess?.stdin.end();
   mediaProcess?.kill();

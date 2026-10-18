@@ -11,7 +11,7 @@ const subscribe = (channel, callback) => {
 contextBridge.exposeInMainWorld('notch', Object.freeze({
   settings: Object.freeze({ get: invoke('notch:settings:get'), save: invoke('notch:settings:save') }),
   system: Object.freeze({ stats: invoke('notch:system:stats') }),
-  media: Object.freeze({ get: invoke('notch:media:get'), control: invoke('notch:media:control'), onChanged: callback => subscribe('notch:media:changed', callback) }),
+  media: Object.freeze({ get: invoke('notch:media:get'), control: invoke('notch:media:control'), onChanged: callback => subscribe('notch:media:changed', callback), onLevels: callback => subscribe('notch:media:levels', callback) }),
   controls: Object.freeze({ get: invoke('notch:controls:get'), volume: invoke('notch:controls:volume'), mute: invoke('notch:controls:mute'), brightness: invoke('notch:controls:brightness') }),
   wireless: Object.freeze({ get: invoke('notch:wireless:get'), radio: invoke('notch:wireless:radio'), scanWifi: invoke('notch:wireless:wifi:scan'), connectWifi: invoke('notch:wireless:wifi:connect'), disconnectWifi: invoke('notch:wireless:wifi:disconnect'), scanBluetooth: invoke('notch:wireless:bluetooth:scan'), pairBluetooth: invoke('notch:wireless:bluetooth:pair') }),
   windows: Object.freeze({ settings: invoke('notch:windows:settings') }),
@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('notch', Object.freeze({
   notify: invoke('notch:notify'),
   version: invoke('notch:version'),
   displays: invoke('notch:display:list'),
+  onDisplayChanged: callback => subscribe('notch:display:changed', callback),
   setScene: invoke('notch:window:scene'),
   show: invoke('notch:window:show'),
   onToggle: callback => subscribe('notch:toggle', callback),

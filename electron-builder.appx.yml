@@ -5,7 +5,7 @@ electronDist: node_modules/electron/dist
 toolsets:
   winCodeSign: '1.1.0'
 directories:
-  output: dist/appx
+  output: Build-test/appx
 files:
   - src/**/*
   - assets/**/*
@@ -13,6 +13,8 @@ files:
 extraResources:
   - from: src/native/build/Release/wireless.node
     to: wireless.node
+  - from: src/native/build/Release/audio.node
+    to: audio.node
 win:
   icon: assets/notch.ico
   target: appx

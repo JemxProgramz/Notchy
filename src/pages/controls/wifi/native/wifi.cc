@@ -1,5 +1,5 @@
-#include "wireless_api.h"
-#include "wireless_common.h"
+#include "../../wireless/native/wireless_api.h"
+#include "../../wireless/native/wireless_common.h"
 
 #include <algorithm>
 #include <atomic>

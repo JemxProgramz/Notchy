@@ -16,7 +16,7 @@ namespace {
 // mode once it has entered one, and uninitializing between calls can tear down
 // shared WinRT state that a later call still depends on. So each worker thread
 // is initialized once as a multi-threaded apartment and left that way. The
-// Bluetooth scan uses its own single-threaded thread (see wireless_bluetooth.cc)
+// Bluetooth scan uses its own single-threaded thread (see ../../bluetooth/native/bluetooth.cc)
 // because its device watcher needs a pumped apartment.
 void EnsureApartment() {
   static thread_local const bool ready = [] {

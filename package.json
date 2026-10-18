@@ -1,6 +1,6 @@
 {
   "name": "notch-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A lightweight Windows Dynamic Island utility",
   "main": "src/main.js",
   "engines": {
@@ -38,11 +38,15 @@
       {
         "from": "src/native/build/Release/wireless.node",
         "to": "wireless.node"
+      },
+      {
+        "from": "src/native/build/Release/audio.node",
+        "to": "audio.node"
       }
     ],
     "electronDist": "node_modules/electron/dist",
     "directories": {
-      "output": "dist"
+      "output": "Build-test"
     },
     "files": [
       "src/**/*",
